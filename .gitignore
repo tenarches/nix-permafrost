@@ -1,0 +1,41 @@
+# NixOS/Flake artifacts
+result/
+result-*
+.direnv/
+.nix-profile/
+.nix-defexpr/
+
+# Lock files
+# flake.lock # Keep this if you want reproducible builds!
+
+# User-specific
+.mcp.json
+.claude/
+.env
+.direnv/
+debug/
+
+# Host deployment values (real domains/addresses — never commit)
+# hosts/avina/site-config.nix
+
+# System specific
+hardware-configuration.nix.bak
+*.swp
+*~
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+*.sync-conflict-*
+
+# MicroVM Runtime Artifacts
+*.sock
+*.sock.pid
+notify.vsock*
+/run/microvm/
+/var/lib/microvms/
+
+# Ignore Gemini CLI environment settings to protect API keys
+.gemini/settings.json
