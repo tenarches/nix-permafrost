@@ -101,6 +101,8 @@
   systemd.tmpfiles.rules = [
     "L+ /home/agent/.agents - - - - /mnt/persist/.agents"
     "L+ /home/agent/workspace - - - - /mnt/persist/workspace"
+    "d /home/agent/.ssh 0700 agent users - -"
+    "L+ /home/agent/.ssh/authorized_keys - - - - /run/credentials/sshd.service/ssh.authorized_keys.agent"
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
     "d /home/agent/.local/share 0700 agent users - -"
@@ -147,6 +149,20 @@
 
   # Enable autologin on the serial console for nix run ergonomics
   services.getty.autologinUser = "agent";
+
+  # SSH Configuration for JIT MicroVM lifecycle
+  services.openssh = {
+    enable = true;
+    settings = {
+      PasswordAuthentication = false;
+      KbdInteractiveAuthentication = false;
+      PermitRootLogin = "prohibit-password";
+    };
+  };
+
+  systemd.services.sshd.serviceConfig.LoadCredential = [
+    "ssh.authorized_keys.agent"
+  ];
 
   home-manager = {
     useGlobalPkgs = true;
