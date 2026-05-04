@@ -37,6 +37,27 @@ Every sandbox ships with `tmux` pre-configured. Because LLM agents often run lon
 
 The tmux prefix is `Ctrl-a` (same as the hypervisor escape). To send a literal `Ctrl-a` to tmux when inside the VM, press `Ctrl-a` twice (`Ctrl-a Ctrl-a`). To terminate the VM from within tmux, detach first (`Ctrl-a d`), then press `Ctrl-a x` at the bare console.
 
+## Lifecycle Management
+
+Sandboxes can be run in the foreground (interactive) or in the background (detached). The runner script supports several subcommands:
+
+- **`run` (default)**: Launches the VM in the foreground with an interactive serial console attached to your terminal. This is the standard "JIT" mode.
+- **`start`**: Launches the VM in the background as a detached `systemd` service. This is ideal for long-running agents or servers.
+- **`stop`**: Gracefully terminates the sandbox and cleans up all host-side resources (network bridges, sockets, mounts).
+- **`status`**: Reports the current execution state, including the guest IP address and VSOCK CID.
+
+**Example:**
+```bash
+# Start an agent in the background
+sudo nix run .#claude -- start
+
+# Check its IP
+sudo nix run .#claude -- status
+
+# Stop it when finished
+sudo nix run .#claude -- stop
+```
+
 ## Persistence
 
 ### What Persists (survives VM termination)
@@ -56,6 +77,39 @@ Each agent spec can also declare **per-agent persistent shares** via the `persis
 ## Credentials
 
 API keys declared in an agent's `credentials` field are injected automatically at VM launch. The host decrypts them via `sops-nix` and passes them into the guest as OEM strings — they never touch the Nix store or the guest disk. See the [Secret Injection Pipeline](../README.md#secret-injection-pipeline) diagram for the full flow.
+
+## SSH Access
+
+Every sandbox is pre-configured with OpenSSH. Authentication is strictly key-based and "late-bound" to avoid triggering Nix rebuilds when your keys change.
+
+### Key Injection
+
+At launch, the runner automatically collects authorized keys from:
+1. Your active **`ssh-agent`** (via `ssh-add -L`).
+2. The **`AGENT_PUBKEYS`** environment variable.
+
+These keys are injected into the guest via `systemd` credentials and symlinked to `~agent/.ssh/authorized_keys`.
+
+### Recommended SSH Config
+
+Add the following to your `~/.ssh/config` for easy access:
+
+```ssh
+Host permafrost-*
+    User agent
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Example for TCP connection (requires 'status' to get IP)
+Host permafrost-claude
+    HostName 192.168.33.10
+
+# Example for VSOCK connection (more robust, bypasses networkstack)
+Host permafrost-claude-vsock
+    ProxyCommand socat - VSOCK-CONNECT:10:22
+```
+
+> **Note:** VSOCK connectivity requires `socat` to be installed on your host.
 
 ## GUI and Wayland Passthrough
 
