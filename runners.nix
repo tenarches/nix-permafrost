@@ -117,9 +117,13 @@ let
               environment.systemPackages = spec.extraPackages;
 
               # Dynamically map persistent shares into /home/agent
-              systemd.tmpfiles.rules = map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (
-                spec.persistentShares or [ ]
-              );
+              systemd.tmpfiles.rules = map (
+                s:
+                if (s.is_file or false) then
+                  "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}/${builtins.baseNameOf s.host}"
+                else
+                  "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}"
+              ) (spec.persistentShares or [ ]);
             }
           )
         ];
@@ -183,7 +187,7 @@ let
         ) &
 
         # 4. Process Launch Wrapper
-        # We wrap everything in a systemd-run scope to ensure RuntimeDirectory cleanup works
+        # We wrap everything in a systemd-run service to ensure RuntimeDirectory cleanup works
         # regardless of how the script or VM exits.
 
         LAUNCH_COMMAND='
@@ -191,7 +195,7 @@ let
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
           
           ${lib.optionalString (spec.gui or false) ''
-            ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/wayland.sock" --shared-dir "'$HOST_XDG_RUNTIME_DIR'" --sandbox namespace &
+            ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/wayland.sock" --shared-dir "$HOST_XDG_RUNTIME_DIR" --sandbox namespace &
             ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/dri.sock" --shared-dir /dev/dri --sandbox namespace &
           ''}
 
@@ -200,23 +204,45 @@ let
             let
               tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
             in
-            ''
-              ${pkgs.coreutils}/bin/mkdir -p "'$REAL_HOME'/${s.host}"
-              ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/${tag}.sock" --shared-dir "'$REAL_HOME'/${s.host}" --sandbox namespace &
-            ''
+            if (s.is_file or false) then
+              ''
+                if [ -f "$REAL_HOME/${s.host}" ]; then
+                  FILE_NAME=$(basename "${s.host}")
+                  ${pkgs.coreutils}/bin/mkdir -p "$SOCKET_DIR/mnt/${tag}"
+                  ${pkgs.coreutils}/bin/touch "$SOCKET_DIR/mnt/${tag}/$FILE_NAME"
+                  ${pkgs.util-linux}/bin/mount --bind "$REAL_HOME/${s.host}" "$SOCKET_DIR/mnt/${tag}/$FILE_NAME"
+                  ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${tag}.sock" --shared-dir "$SOCKET_DIR/mnt/${tag}" --sandbox namespace &
+                else
+                  echo "Error: Mandatory persistent file $REAL_HOME/${s.host} not found."
+                  exit 1
+                fi
+              ''
+            else
+              ''
+                ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
+                ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${tag}.sock" --shared-dir "$REAL_HOME/${s.host}" --sandbox namespace &
+              ''
           ) allShares}
 
           # Wait for backend readiness
           echo "Waiting for virtiofsd backends..."
-          while [ ! -S "'$SOCKET_DIR'/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+          while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+          # Wait for all other sockets defined in allShares
+          ${lib.concatMapStringsSep "\n" (
+            s:
+            let
+              tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+            in
+            ''while [ ! -S "$SOCKET_DIR/${tag}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
+          ) allShares}
 
           # Final VM Launch
           # We patch the cmdline for Wayland and ensure all control sockets are in SOCKET_DIR
           # The notify.vsock and nixos.sock are moved here to keep the project root pure.
           ${nixosConfig.config.microvm.declaredRunner}/bin/microvm-run \
-            --cmdline "wayland_display='$HOST_WAYLAND_DISPLAY' " \
-            --api-socket "'$SOCKET_DIR'/nixos.sock" \
-            --vsock "cid=10,socket='$SOCKET_DIR'/notify.vsock"
+            --cmdline "wayland_display=$HOST_WAYLAND_DISPLAY " \
+            --api-socket "$SOCKET_DIR/nixos.sock" \
+            --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock"
         '
 
         exec systemd-run \
@@ -230,8 +256,14 @@ let
             lib.makeBinPath [
               pkgs.coreutils
               pkgs.bash
+              pkgs.util-linux
             ]
           }" \
+          --property="Environment=REAL_HOME=$REAL_HOME" \
+          --property="Environment=HOST_XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR" \
+          --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY" \
+          --property="Environment=SOCKET_DIR=$SOCKET_DIR" \
+          --property="Environment=RUNTIME_NAME=$RUNTIME_NAME" \
           --description="Permafrost VM: ${spec.name}" \
           ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
       '';

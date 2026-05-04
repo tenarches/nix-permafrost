@@ -26,6 +26,11 @@ in
         host = ".claude";
         guest = ".claude";
       }
+      {
+        host = ".claude.json";
+        guest = ".claude.json";
+        is_file = true;
+      }
     ];
     extraPackages = [
       inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code
