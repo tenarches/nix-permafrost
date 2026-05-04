@@ -160,33 +160,32 @@ graph LR
 
 ## GUI Passthrough
 
-Agents with `gui = true` in their inventory spec get Wayland/GPU passthrough through the KVM boundary, enabling graphical applications at near-native performance.
+Agents with `gui = true` get the host's Wayland socket mounted into the guest via
+`virtiofs`. Rendering uses Mesa llvmpipe (software rasterisation). Sharing
+`/dev/dri` character devices through a virtiofsd namespace sandbox is incompatible
+with the seccomp allowlist required for namespace isolation, so hardware GPU is
+intentionally not exposed.
 
 ```mermaid
 graph LR
     subgraph HOST["Host"]
         WL_SOCK["/run/user/1000/<br/>wayland-*"]
-        DRI["/dev/dri<br/>(GPU devices)"]
     end
 
     subgraph VFS["virtiofs"]
-        WL_VFS["wayland.sock"]
-        DRI_VFS["dri.sock"]
+        WL_VFS["wayland.sock<br/>(--sandbox namespace)"]
     end
 
     subgraph GUEST["GUI-enabled VM"]
         G_WL["/run/user/1000/<br/>wayland-*"]
-        G_DRI["/dev/dri"]
-        ENV["WAYLAND_DISPLAY<br/>XDG_RUNTIME_DIR<br/>NIXOS_OZONE_WL=1"]
-        ELECTRON["Electron App<br/>(near-native perf)"]
+        ENV["WAYLAND_DISPLAY<br/>XDG_RUNTIME_DIR<br/>NIXOS_OZONE_WL=1<br/>LIBGL_ALWAYS_SOFTWARE=1"]
+        ELECTRON["Electron App<br/>(Mesa llvmpipe)"]
 
         G_WL --> ELECTRON
-        G_DRI --> ELECTRON
         ENV --> ELECTRON
     end
 
     WL_SOCK --> WL_VFS --> G_WL
-    DRI --> DRI_VFS --> G_DRI
 
     style HOST fill:#0f3460,color:#fff
     style GUEST fill:#533483,color:#fff

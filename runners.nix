@@ -49,7 +49,7 @@ let
                 interfaces = [
                   {
                     type = "tap";
-                    id = "microvm-" + (builtins.substring 0 5 spec.name);
+                    id = "microvm-" + spec.tapId;
                     inherit (spec) mac;
                   }
                 ];
@@ -82,13 +82,6 @@ let
                       proto = "virtiofs";
                       socket = "/run/microvm-${spec.name}/wayland.sock";
                     }
-                    {
-                      source = "/dev/dri";
-                      mountPoint = "/dev/dri";
-                      tag = "dri";
-                      proto = "virtiofs";
-                      socket = "/run/microvm-${spec.name}/dri.sock";
-                    }
                   ])
                 );
               };
@@ -97,6 +90,8 @@ let
                 WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
                 XDG_RUNTIME_DIR = "/run/user/1000";
                 NIXOS_OZONE_WL = "1";
+                LIBGL_ALWAYS_SOFTWARE = "1";
+                WLR_RENDERER_ALLOW_SOFTWARE = "1";
               };
 
               # Match any virtio network interface
@@ -151,7 +146,7 @@ let
         SOCKET_DIR="/run/$RUNTIME_NAME"
         BRIDGE="microbr"
         GATEWAY_IP="192.168.33.1"
-        TAP_ID="microvm-$(echo ${spec.name} | cut -c1-5)"
+        TAP_ID="microvm-${spec.tapId}"
 
         echo "Initializing Pure Sandbox Lifecycle for ${spec.name}..."
         echo "Runtime Directory: $SOCKET_DIR"
@@ -165,6 +160,39 @@ let
 
         ${pkgs.procps}/bin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
         EXT_IF=$(ip route | grep default | awk '{print $5}' | head -n1)
+
+        # Capture for use inside cleanup — EXT_IF may be empty if no default route exists
+        EXT_IF_AT_LAUNCH="$EXT_IF"
+
+        cleanup() {
+          echo "Permafrost: cleaning up ${spec.name}..."
+
+          if [ -n "$EXT_IF_AT_LAUNCH" ]; then
+            ${pkgs.iptables}/bin/iptables -t nat -D POSTROUTING \
+              -s 192.168.33.0/24 -o "$EXT_IF_AT_LAUNCH" -j MASQUERADE 2>/dev/null || true
+            ${pkgs.iptables}/bin/iptables -D FORWARD \
+              -i "$BRIDGE" -j ACCEPT 2>/dev/null || true
+            ${pkgs.iptables}/bin/iptables -D FORWARD \
+              -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+          fi
+
+          # Remove bridge only if no tap interfaces remain attached
+          if ip link show "$BRIDGE" >/dev/null 2>&1; then
+            ATTACHED=$(ls /sys/class/net/"$BRIDGE"/brif 2>/dev/null | wc -l)
+            if [ "$ATTACHED" -eq 0 ]; then
+              ip link set "$BRIDGE" down 2>/dev/null || true
+              ip link del "$BRIDGE" 2>/dev/null || true
+              echo "Permafrost: bridge $BRIDGE removed."
+            else
+              echo "Permafrost: bridge $BRIDGE still has $ATTACHED attached interface(s); leaving in place."
+            fi
+          fi
+
+          echo "Permafrost: cleanup complete for ${spec.name}."
+        }
+
+        trap cleanup EXIT INT TERM
+
         if [ -n "$EXT_IF" ]; then
           ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
             ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE
@@ -196,7 +224,6 @@ let
           
           ${lib.optionalString (spec.gui or false) ''
             ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/wayland.sock" --shared-dir "$HOST_XDG_RUNTIME_DIR" --sandbox namespace &
-            ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/dri.sock" --shared-dir /dev/dri --sandbox namespace &
           ''}
 
           ${lib.concatMapStringsSep "\n" (
@@ -245,7 +272,7 @@ let
             --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock"
         '
 
-        exec systemd-run \
+        systemd-run \
           --pty \
           --wait \
           --collect \

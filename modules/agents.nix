@@ -32,19 +32,13 @@ let
             tag = "wayland";
             proto = "virtiofs";
           }
-          {
-            source = "/dev/dri";
-            mountPoint = "/dev/dri";
-            tag = "dri";
-            proto = "virtiofs";
-          }
         ]);
 
         vsock.cid = spec.vsockCid;
         interfaces = [
           {
             type = "tap";
-            id = "vm-" + (builtins.substring 0 5 spec.name); # Simplified ID
+            id = "vm-" + spec.tapId;
             inherit (spec) mac;
           }
         ];
@@ -54,6 +48,8 @@ let
         WAYLAND_DISPLAY = "wayland-0";
         XDG_RUNTIME_DIR = "/run/user/1000";
         NIXOS_OZONE_WL = "1";
+        LIBGL_ALWAYS_SOFTWARE = "1";
+        WLR_RENDERER_ALLOW_SOFTWARE = "1";
       };
 
       # microvm.credentialFiles = spec.credentials or {};

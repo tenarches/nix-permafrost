@@ -59,9 +59,13 @@ API keys declared in an agent's `credentials` field are injected automatically a
 
 ## GUI and Wayland Passthrough
 
-Agents with `gui = true` in their inventory spec get the host's Wayland socket and GPU devices (`/dev/dri`) mounted into the guest via `virtiofs`. The runner auto-detects the active Wayland socket on the host (defaulting to `wayland-0`, probing if necessary). This provides near-native GUI performance for Electron-based tools inside the isolated KVM boundary.
+Agents with `gui = true` in their inventory spec get the host's Wayland socket mounted into the guest via `virtiofs`. The runner auto-detects the active Wayland socket on the host (defaulting to `wayland-0`, probing if necessary).
+
+Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for browser automation, headless Chromium, and Electron-based tools. Hardware GPU acceleration is intentionally not exposed — sharing `/dev/dri` character devices through a virtiofsd namespace sandbox is incompatible with the seccomp allowlist required for namespace isolation.
 
 Environment variables set automatically inside GUI-enabled guests:
 - `WAYLAND_DISPLAY` — auto-detected from the host
 - `XDG_RUNTIME_DIR=/run/user/1000`
 - `NIXOS_OZONE_WL=1` — enables Ozone/Wayland backend for Electron apps
+- `LIBGL_ALWAYS_SOFTWARE=1` — forces Mesa llvmpipe; skips hardware DRI probe
+- `WLR_RENDERER_ALLOW_SOFTWARE=1` — required for wlroots-based compositors
