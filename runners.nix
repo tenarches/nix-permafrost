@@ -126,6 +126,9 @@ let
 
       runnerScript = pkgs.writeShellScriptBin spec.name ''
         set -e
+        COMMAND="''${1:-run}"
+        [ $# -gt 0 ] && shift
+
         # 1. Environment Detection
         if [ -n "$SUDO_USER" ]; then
           REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
@@ -144,9 +147,39 @@ let
         # We use Systemd RuntimeDirectory for "pure" automatic cleanup of all sockets/pids
         RUNTIME_NAME="microvm-${spec.name}"
         SOCKET_DIR="/run/$RUNTIME_NAME"
+        UNIT_NAME="microvm-${spec.name}"
         BRIDGE="microbr"
         GATEWAY_IP="192.168.33.1"
         TAP_ID="microvm-${spec.tapId}"
+
+        case "$COMMAND" in
+          status)
+            if systemctl is-active --quiet "$UNIT_NAME"; then
+              echo "Status: RUNNING"
+              echo "IP:     ${spec.ip}"
+              echo "CID:    ${toString spec.vsockCid}"
+              echo "Runtime: $SOCKET_DIR"
+            else
+              echo "Status: STOPPED"
+            fi
+            exit 0
+            ;;
+          stop)
+            echo "Stopping $UNIT_NAME..."
+            systemctl stop "$UNIT_NAME"
+            exit 0
+            ;;
+          run|start)
+            if systemctl is-active --quiet "$UNIT_NAME"; then
+              echo "Error: $UNIT_NAME is already running."
+              exit 1
+            fi
+            ;;
+          *)
+            echo "Usage: $0 {run|start|stop|status}"
+            exit 1
+            ;;
+        esac
 
         echo "Initializing Pure Sandbox Lifecycle for ${spec.name}..."
         echo "Runtime Directory: $SOCKET_DIR"
@@ -191,7 +224,9 @@ let
           echo "Permafrost: cleanup complete for ${spec.name}."
         }
 
-        trap cleanup EXIT INT TERM
+        if [ "$COMMAND" = "run" ]; then
+          trap cleanup EXIT INT TERM
+        fi
 
         if [ -n "$EXT_IF" ]; then
           ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
@@ -219,6 +254,16 @@ let
         # regardless of how the script or VM exits.
 
         LAUNCH_COMMAND='
+          # SSH Key Collection
+          mkdir -p "$SOCKET_DIR/creds"
+          touch "$SOCKET_DIR/creds/ssh.authorized_keys.agent"
+          if [ -n "$SSH_AUTH_SOCK" ]; then
+            ssh-add -L >> "$SOCKET_DIR/creds/ssh.authorized_keys.agent" 2>/dev/null || true
+          fi
+          if [ -n "$AGENT_PUBKEYS" ]; then
+            echo "$AGENT_PUBKEYS" >> "$SOCKET_DIR/creds/ssh.authorized_keys.agent"
+          fi
+
           # Start virtiofsd backends
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
           
@@ -269,30 +314,40 @@ let
           ${nixosConfig.config.microvm.declaredRunner}/bin/microvm-run \
             --cmdline "wayland_display=$HOST_WAYLAND_DISPLAY " \
             --api-socket "$SOCKET_DIR/nixos.sock" \
-            --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock"
+            --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock" \
+            --oem-string "io.systemd.credential:ssh.authorized_keys.agent=$(cat $SOCKET_DIR/creds/ssh.authorized_keys.agent)"
         '
 
-        systemd-run \
-          --pty \
-          --wait \
-          --collect \
-          --service-type=exec \
-          --property="RuntimeDirectory=$RUNTIME_NAME" \
-          --property="RuntimeDirectoryPreserve=no" \
+        RUN_ARGS=(
+          --unit="$UNIT_NAME"
+          --collect
+          --service-type=exec
+          --property="RuntimeDirectory=$RUNTIME_NAME"
+          --property="RuntimeDirectoryPreserve=no"
           --property="Environment=PATH=${
             lib.makeBinPath [
               pkgs.coreutils
               pkgs.bash
               pkgs.util-linux
+              pkgs.openssh
             ]
-          }" \
-          --property="Environment=REAL_HOME=$REAL_HOME" \
-          --property="Environment=HOST_XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR" \
-          --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY" \
-          --property="Environment=SOCKET_DIR=$SOCKET_DIR" \
-          --property="Environment=RUNTIME_NAME=$RUNTIME_NAME" \
-          --description="Permafrost VM: ${spec.name}" \
-          ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+          }"
+          --property="Environment=REAL_HOME=$REAL_HOME"
+          --property="Environment=HOST_XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR"
+          --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
+          --property="Environment=SOCKET_DIR=$SOCKET_DIR"
+          --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
+          --property="Environment=SSH_AUTH_SOCK=$SSH_AUTH_SOCK"
+          --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
+          --description="Permafrost VM: ${spec.name}"
+        )
+
+        if [ "$COMMAND" = "run" ]; then
+          systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+        else
+          systemd-run "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+          echo "${spec.name} started in background (unit: $UNIT_NAME)."
+        fi
       '';
     in
     runnerScript;
