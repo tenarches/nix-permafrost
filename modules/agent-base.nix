@@ -102,7 +102,6 @@
     "L+ /home/agent/.agents - - - - /mnt/persist/.agents"
     "L+ /home/agent/workspace - - - - /mnt/persist/workspace"
     "d /home/agent/.ssh 0700 agent users - -"
-    "L+ /home/agent/.ssh/authorized_keys - - - - /run/credentials/sshd.service/ssh.authorized_keys.agent"
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
     "d /home/agent/.local/share 0700 agent users - -"
@@ -158,10 +157,19 @@
       KbdInteractiveAuthentication = false;
       PermitRootLogin = "prohibit-password";
     };
+    authorizedKeysCommand = "${pkgs.writeShellScript "get-ssh-keys" ''
+      # Only return keys for valid agent users
+      if [ "$1" = "agent" ] || [ "$1" = "root" ]; then
+        if [ -f /run/credentials/sshd.service/ssh.authorized_keys.base64 ]; then
+          ${pkgs.coreutils}/bin/base64 -d /run/credentials/sshd.service/ssh.authorized_keys.base64
+        fi
+      fi
+    ''}";
+    authorizedKeysCommandUser = "root";
   };
 
   systemd.services.sshd.serviceConfig.LoadCredential = [
-    "ssh.authorized_keys.agent"
+    "ssh.authorized_keys.base64"
   ];
 
   home-manager = {

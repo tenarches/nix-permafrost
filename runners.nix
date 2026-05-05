@@ -152,6 +152,31 @@ let
         GATEWAY_IP="192.168.33.1"
         TAP_ID="microvm-${spec.tapId}"
 
+        # 3. JIT Credential Collection
+        # We collect keys BEFORE the systemd-run isolation block
+        mkdir -p "$SOCKET_DIR/creds"
+        SSH_KEY_FILE="$SOCKET_DIR/creds/ssh.authorized_keys.agent"
+        touch "$SSH_KEY_FILE"
+        chmod 600 "$SSH_KEY_FILE"
+
+        if [ -n "$SUDO_USER" ] && [ -z "$SSH_AUTH_SOCK" ]; then
+          # Try to find the user's agent if they forgot sudo -E
+          USER_ID=$(id -u "$SUDO_USER")
+          PROBED_SOCK=$(find "/run/user/$USER_ID" -name "ssh" -o -name "agent.*" 2>/dev/null | head -n1)
+          if [ -n "$PROBED_SOCK" ]; then
+            export SSH_AUTH_SOCK="$PROBED_SOCK"
+            echo "Auto-detected SSH agent for $SUDO_USER at $SSH_AUTH_SOCK"
+          fi
+        fi
+
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          # If we are root, we can read the user's socket
+          ssh-add -L >> "$SSH_KEY_FILE" 2>/dev/null || true
+        fi
+        if [ -n "$AGENT_PUBKEYS" ]; then
+          echo "$AGENT_PUBKEYS" >> "$SSH_KEY_FILE"
+        fi
+
         case "$COMMAND" in
           status)
             if systemctl is-active --quiet "$UNIT_NAME"; then
@@ -254,16 +279,6 @@ let
         # regardless of how the script or VM exits.
 
         LAUNCH_COMMAND='
-          # SSH Key Collection
-          mkdir -p "$SOCKET_DIR/creds"
-          touch "$SOCKET_DIR/creds/ssh.authorized_keys.agent"
-          if [ -n "$SSH_AUTH_SOCK" ]; then
-            ssh-add -L >> "$SOCKET_DIR/creds/ssh.authorized_keys.agent" 2>/dev/null || true
-          fi
-          if [ -n "$AGENT_PUBKEYS" ]; then
-            echo "$AGENT_PUBKEYS" >> "$SOCKET_DIR/creds/ssh.authorized_keys.agent"
-          fi
-
           # Start virtiofsd backends
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
           
@@ -315,7 +330,7 @@ let
             --cmdline "wayland_display=$HOST_WAYLAND_DISPLAY " \
             --api-socket "$SOCKET_DIR/nixos.sock" \
             --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock" \
-            --oem-string "io.systemd.credential:ssh.authorized_keys.agent=$(cat $SOCKET_DIR/creds/ssh.authorized_keys.agent)"
+            --oem-string "io.systemd.credential:ssh.authorized_keys.base64=$(cat '"$SSH_KEY_FILE"' | base64 -w0)"
         '
 
         RUN_ARGS=(
@@ -337,7 +352,7 @@ let
           --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
           --property="Environment=SOCKET_DIR=$SOCKET_DIR"
           --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
-          --property="Environment=SSH_AUTH_SOCK=$SSH_AUTH_SOCK"
+          --property="Environment=SSH_KEY_FILE=$SSH_KEY_FILE"
           --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
           --description="Permafrost VM: ${spec.name}"
         )
