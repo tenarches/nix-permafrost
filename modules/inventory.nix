@@ -30,9 +30,9 @@ let
           guest = ".claude";
         }
         {
-          host = ".claude.json";
-          guest = ".claude.json";
-          is_file = true;
+          host = ".config/claude";
+          guest = ".claude-config";
+          guestLink = ".claude.json";
         }
       ];
       extraPackages = [

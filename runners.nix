@@ -119,13 +119,16 @@ let
               environment.systemPackages = spec.extraPackages;
 
               # Dynamically map persistent shares into /home/agent
-              systemd.tmpfiles.rules = map (
-                s:
-                if (s.is_file or false) then
-                  "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}/${builtins.baseNameOf s.host}"
-                else
-                  "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}"
-              ) (spec.persistentShares or [ ]);
+              systemd.tmpfiles.rules =
+                (map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (
+                  spec.persistentShares or [ ]
+                ))
+                ++ (lib.concatMap (
+                  s:
+                  lib.optional (
+                    s ? guestLink
+                  ) "L+ /home/agent/${s.guestLink} - - - - /mnt/persist/${s.guest}/${builtins.baseNameOf s.guestLink}"
+                ) (spec.persistentShares or [ ]));
             }
           )
         ];
@@ -302,24 +305,10 @@ let
             let
               tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
             in
-            if (s.is_file or false) then
-              ''
-                if [ -f "$REAL_HOME/${s.host}" ]; then
-                  FILE_NAME=$(basename "${s.host}")
-                  ${pkgs.coreutils}/bin/mkdir -p "$SOCKET_DIR/mnt/${tag}"
-                  ${pkgs.coreutils}/bin/touch "$SOCKET_DIR/mnt/${tag}/$FILE_NAME"
-                  ${pkgs.util-linux}/bin/mount --bind "$REAL_HOME/${s.host}" "$SOCKET_DIR/mnt/${tag}/$FILE_NAME"
-                  ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${tag}.sock" --shared-dir "$SOCKET_DIR/mnt/${tag}" --sandbox namespace &
-                else
-                  echo "Error: Mandatory persistent file $REAL_HOME/${s.host} not found."
-                  exit 1
-                fi
-              ''
-            else
-              ''
-                ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
-                ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${tag}.sock" --shared-dir "$REAL_HOME/${s.host}" --sandbox namespace &
-              ''
+            ''
+              ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
+              ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${tag}.sock" --shared-dir "$REAL_HOME/${s.host}" --sandbox namespace &
+            ''
           ) allShares}
 
           # Wait for backend readiness
