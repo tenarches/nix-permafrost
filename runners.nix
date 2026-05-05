@@ -63,6 +63,13 @@ let
                       mountPoint = "/nix/.ro-store";
                       socket = "/run/microvm-${spec.name}/ro-store.sock";
                     }
+                    {
+                      tag = "ssh_keys";
+                      proto = "virtiofs";
+                      source = "host-managed-virtiofsd-at-ssh";
+                      mountPoint = "/etc/ssh/authorized_keys.d";
+                      socket = "/run/microvm-${spec.name}/ssh.sock";
+                    }
                   ]
                   ++ (map (s: {
                     source = "host-managed-virtiofsd-at-${s.host}";
@@ -154,10 +161,10 @@ let
 
         # 3. JIT Credential Collection
         # We collect keys BEFORE the systemd-run isolation block
-        mkdir -p "$SOCKET_DIR/creds"
-        SSH_KEY_FILE="$SOCKET_DIR/creds/ssh.authorized_keys.agent"
-        touch "$SSH_KEY_FILE"
-        chmod 600 "$SSH_KEY_FILE"
+        # We use a shared directory pattern recommended by microvm.nix
+        SSH_KEYS_DIR="$SOCKET_DIR/ssh-keys"
+        mkdir -p "$SSH_KEYS_DIR"
+        chmod 755 "$SSH_KEYS_DIR"
 
         if [ -n "$SUDO_USER" ] && [ -z "$SSH_AUTH_SOCK" ]; then
           # Try to find the user's agent if they forgot sudo -E
@@ -169,13 +176,16 @@ let
           fi
         fi
 
+        # Extract keys for both agent and root
         if [ -n "$SSH_AUTH_SOCK" ]; then
-          # If we are root, we can read the user's socket
-          ssh-add -L >> "$SSH_KEY_FILE" 2>/dev/null || true
+          ssh-add -L > "$SSH_KEYS_DIR/agent" 2>/dev/null || true
+          cp "$SSH_KEYS_DIR/agent" "$SSH_KEYS_DIR/root" || true
         fi
         if [ -n "$AGENT_PUBKEYS" ]; then
-          echo "$AGENT_PUBKEYS" >> "$SSH_KEY_FILE"
+          echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/agent"
+          echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/root"
         fi
+        chmod 644 "$SSH_KEYS_DIR"/* || true
 
         case "$COMMAND" in
           status)
@@ -281,6 +291,7 @@ let
         LAUNCH_COMMAND='
           # Start virtiofsd backends
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
+          ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
           
           ${lib.optionalString (spec.gui or false) ''
             ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/wayland.sock" --shared-dir "$HOST_XDG_RUNTIME_DIR" --sandbox namespace &
@@ -314,6 +325,7 @@ let
           # Wait for backend readiness
           echo "Waiting for virtiofsd backends..."
           while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+          while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
           # Wait for all other sockets defined in allShares
           ${lib.concatMapStringsSep "\n" (
             s:
@@ -329,8 +341,7 @@ let
           ${nixosConfig.config.microvm.declaredRunner}/bin/microvm-run \
             --cmdline "wayland_display=$HOST_WAYLAND_DISPLAY " \
             --api-socket "$SOCKET_DIR/nixos.sock" \
-            --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock" \
-            --oem-string "io.systemd.credential:ssh.authorized_keys.base64=$(cat '"$SSH_KEY_FILE"' | base64 -w0)"
+            --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock"
         '
 
         RUN_ARGS=(
@@ -352,7 +363,7 @@ let
           --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
           --property="Environment=SOCKET_DIR=$SOCKET_DIR"
           --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
-          --property="Environment=SSH_KEY_FILE=$SSH_KEY_FILE"
+          --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
           --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
           --description="Permafrost VM: ${spec.name}"
         )

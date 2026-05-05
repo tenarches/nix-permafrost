@@ -80,15 +80,17 @@ API keys declared in an agent's `credentials` field are injected automatically a
 
 ## SSH Access
 
-Every sandbox is pre-configured with OpenSSH. Authentication is strictly key-based and "late-bound" to avoid triggering Nix rebuilds when your keys change.
+Every sandbox is pre-configured with OpenSSH. Authentication is strictly key-based and uses a **Shared Directory** pattern (via `virtiofs`) to inject your host's keys at runtime. This ensures that changing your SSH keys never triggers a Nix rebuild of the VM.
 
 ### Key Injection
 
-At launch, the runner automatically collects authorized keys from:
+At launch, the runner automatically collects public keys from:
 1. Your active **`ssh-agent`** (via `ssh-add -L`).
 2. The **`AGENT_PUBKEYS`** environment variable.
 
-These keys are injected into the guest via `systemd` credentials and symlinked to `~agent/.ssh/authorized_keys`.
+The runner creates an ephemeral `ssh-keys` directory on the host, populates it with these keys for both the `agent` and `root` users, and shares it with the guest. The guest is configured to trust these keys for authentication.
+
+**Note:** If you run the sandbox via `sudo`, the runner will attempt to auto-detect your user's SSH agent socket in `/run/user/$(id -u $SUDO_USER)`.
 
 ### Recommended SSH Config
 
@@ -103,13 +105,7 @@ Host permafrost-*
 # Example for TCP connection (requires 'status' to get IP)
 Host permafrost-claude
     HostName 192.168.33.10
-
-# Example for VSOCK connection (more robust, bypasses networkstack)
-Host permafrost-claude-vsock
-    ProxyCommand socat - VSOCK-CONNECT:10:22
 ```
-
-> **Note:** VSOCK connectivity requires `socat` to be installed on your host.
 
 ## GUI and Wayland Passthrough
 
