@@ -194,6 +194,57 @@ graph LR
 
 ---
 
+---
+
+## Builder-Verifier Architecture
+
+The Builder-Verifier (BV) system uses a dual-agent model to automate the "Trust but Verify" workflow. It separates the creative task of code generation from the analytical task of auditing.
+
+### System Components
+
+```mermaid
+graph TD
+    subgraph GUEST["BV MicroVM"]
+        ORCH["Orchestrator<br/>(Node.js SDK)"]
+        BUILDER["Builder Agent<br/>(Gemini 2.5)"]
+        VERIFIER["Verifier Agent<br/>(Qwen 3.6 35B)"]
+        SESSIONS["Session Logs<br/>(JSONL)"]
+    end
+
+    subgraph HOST["Inference Host (dualie)"]
+        LLAMA["llama-server<br/>(:8001)"]
+    end
+
+    ORCH -->|drive| BUILDER
+    ORCH -->|drive| VERIFIER
+    BUILDER -->|log| SESSIONS
+    VERIFIER -->|audit| SESSIONS
+    VERIFIER -->|inference| LLAMA
+
+    style GUEST fill:#1a1a2e22,stroke:#e94560
+    style LLAMA fill:#4361ee,stroke:#3a0ca3,color:#fff
+```
+
+### The Verification Loop
+
+The orchestrator enforces a strict state machine to ensure quality and security:
+
+1.  **Prime:** Builder loads project context using the `prime` skill.
+2.  **Build:** Builder implements the task and provides a "Completion Summary" with atomic claims.
+3.  **Lint:** Orchestrator runs deterministic checks (`tsc`, `eslint`) in the workspace.
+4.  **Verify:** Verifier reads the full Builder session log and validates each atomic claim against tool outputs.
+5.  **Feedback:** If verification or linting fails, the Orchestrator provides feedback to the Builder for a retry (max 2 rounds).
+
+### Key Architectural Patterns
+
+- **Declarative Orchestration:** The entire orchestrator, agent instructions, and security extensions are managed declaratively via Nix. This ensures that the agent's "personality" and reasoning logic are versioned alongside the code.
+- **Bash Lockdown:** The builder operates under a strict command allowlist (`bash-lockdown.ts`) to prevent unauthorized system modifications.
+- **Read-Only Verification:** The verifier is architecturally restricted from modifying files or executing bash, ensuring its audit is strictly analytical.
+- **Local Inference:** The Verifier uses a local llama.cpp endpoint (`dualie.home.lan:8001`) for data residency and specialized reasoning performance.
+- **Completion Summaries:** The system relies on "Atomic Claims" — verifiable statements made by the builder that the verifier must prove or disprove based on session evidence.
+
+---
+
 ## Dual Execution Modes
 
 The same `inventory.nix` spec powers two different execution paths. **Standalone mode** (`nix run`) is for developers running agents on any NixOS machine. **Fleet mode** (`nixosConfigurations.permafrost`) is for deploying a dedicated multi-agent host.

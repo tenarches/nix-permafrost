@@ -16,7 +16,7 @@
     hypervisor = lib.mkDefault "cloud-hypervisor";
     vsock.cid = lib.mkDefault 10;
     vcpu = lib.mkDefault 4;
-    mem = lib.mkDefault 4098; # Avoid 4096MB hang in certain hypervisors (e.g. cloud-hypervisor)
+    mem = lib.mkDefault 8194; # Avoid 4096MB hang in certain hypervisors (e.g. cloud-hypervisor)
 
     # The Nix store from the host is shared read-only into the guest.
     shares = [

@@ -107,7 +107,76 @@ Host permafrost-claude
     HostName 192.168.33.10
 ```
 
-## GUI and Wayland Passthrough
+## Builder-Verifier (BV) Workflow
+
+The `bv` agent implements an autonomous "Builder-Verifier" dual-agent architecture. It uses a high-capability builder (Gemini) and a specialized local verifier (Qwen) to automate code generation with an integrated audit loop.
+
+### Launching the BV Environment
+
+```bash
+sudo nix run .#bv
+```
+
+Once inside the VM, you have two primary ways to execute tasks.
+
+### Mode 1: Interactive (TMUX)
+
+This mode is recommended for developing prompts, debugging agent behavior, or when you want to watch the agents work in real-time. It uses a four-pane tmux layout:
+
+1.  **Start TMUX:** `tmux new-session -s bv`
+2.  **Split Panes:** Set up the panes for Builder, Verifier, Coordinator Log, and Session Watcher.
+3.  **Run Coordinator:** Use the provided script to manage the handoff:
+    ```bash
+    cd ~/bv/orchestrator
+    ./coordinator.sh path/to/task.md
+    ```
+
+The coordinator will prompt the builder, wait for completion, and then automatically trigger the verifier to audit the session.
+
+### Mode 2: Headless (Orchestrator)
+
+This mode is ideal for stable workflows and automated runs. The orchestrator manages the entire lifecycle (Build -> Lint -> Verify) and streams human-readable events to your terminal.
+
+```bash
+cd ~/bv/orchestrator
+npm start -- --task "Implement a JWT authentication service with Fastify and jose"
+```
+
+The orchestrator will:
+1.  **Prime** the builder with codebase context.
+2.  **Execute** the build phase.
+3.  **Run** deterministic linting checks (`tsc`, `eslint`).
+4.  **Audit** the session using the Verifier agent.
+5.  **Retry** up to 2 times if verification or linting fails, providing the builder with specific feedback.
+
+### Writing Effective Tasks
+
+For the BV system to be effective, tasks should include clear **Acceptance Criteria**. The Verifier audits the session against these criteria.
+
+**Example Task Structure:**
+```markdown
+/skill:prime
+
+---
+PROJECT TYPE: existing
+TASK: Add refresh token rotation to the auth service.
+
+SCOPE:
+- Work within: src/auth/
+- Target branch: feature/jwt-rotation
+
+ACCEPTANCE CRITERIA:
+1. src/auth/token.ts exports rotateRefreshToken
+2. Old refresh token is revoked in Redis before new pair is issued
+3. npm test exits 0
+```
+
+### External Tools (MCP)
+
+The builder has access to Model Context Protocol (MCP) servers via the `mcporter` bridge. To use it:
+- Invoke the skill: `/skill:mcporter`
+- Call tools: `npx mcporter call github.create_issue ...`
+- Discover servers: `npx mcporter list`
 
 Agents with `gui = true` in their inventory spec get the host's Wayland socket mounted into the guest via `virtiofs`. The runner auto-detects the active Wayland socket on the host (defaulting to `wayland-0`, probing if necessary).
 
