@@ -80,6 +80,7 @@ let
         (map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (
           spec.persistentShares or [ ]
         ))
+        ++ (map (s: "d /mnt/persist/${s.guest} 0700 agent users - -") (spec.persistentShares or [ ]))
         ++ (lib.concatMap (
           s:
           lib.optional (
