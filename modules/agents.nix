@@ -44,13 +44,15 @@ let
         ];
       };
 
-      environment.variables = lib.optionalAttrs (spec.gui or false) {
-        WAYLAND_DISPLAY = "wayland-0";
-        XDG_RUNTIME_DIR = "/run/user/1000";
-        NIXOS_OZONE_WL = "1";
-        LIBGL_ALWAYS_SOFTWARE = "1";
-        WLR_RENDERER_ALLOW_SOFTWARE = "1";
-      };
+      environment.variables =
+        (lib.optionalAttrs (spec.gui or false) {
+          WAYLAND_DISPLAY = "wayland-0";
+          XDG_RUNTIME_DIR = "/run/user/1000";
+          NIXOS_OZONE_WL = "1";
+          LIBGL_ALWAYS_SOFTWARE = "1";
+          WLR_RENDERER_ALLOW_SOFTWARE = "1";
+        })
+        // (spec.env or { });
 
       # microvm.credentialFiles = spec.credentials or {};
 

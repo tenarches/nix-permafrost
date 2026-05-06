@@ -102,7 +102,49 @@ let
           guest = ".pi";
         }
       ];
-      extraPackages = [ inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi ];
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
+      ]
+      ++ mcpServers;
+    };
+
+    bv = {
+      name = "bv";
+      tapId = "bv";
+      ip = "192.168.33.16";
+      mac = "02:00:00:00:00:16";
+      vsockCid = 16;
+      workspacePath = "/run/agent-workspaces/bv";
+      persistentShares = [
+        # Pi auth — Gemini OAuth tokens (written by `pi /login`)
+        {
+          host = ".pi";
+          guest = ".pi";
+        }
+        # Builder-verifier project tree: orchestrator, configs, sessions
+        {
+          host = "bv";
+          guest = "bv";
+        }
+        # mcporter MCP server configuration
+        {
+          host = ".mcporter";
+          guest = ".mcporter";
+        }
+      ];
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
+        pkgs.nodejs_22
+      ]
+      ++ mcpServers;
+      credentials = {
+        GITHUB_TOKEN = "/run/secrets/github-token";
+      };
+      env = {
+        LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
+      };
     };
 
     antigravity = {

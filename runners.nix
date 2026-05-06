@@ -93,13 +93,15 @@ let
                 );
               };
 
-              environment.variables = lib.optionalAttrs (spec.gui or false) {
-                WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
-                XDG_RUNTIME_DIR = "/run/user/1000";
-                NIXOS_OZONE_WL = "1";
-                LIBGL_ALWAYS_SOFTWARE = "1";
-                WLR_RENDERER_ALLOW_SOFTWARE = "1";
-              };
+              environment.variables =
+                (lib.optionalAttrs (spec.gui or false) {
+                  WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
+                  XDG_RUNTIME_DIR = "/run/user/1000";
+                  NIXOS_OZONE_WL = "1";
+                  LIBGL_ALWAYS_SOFTWARE = "1";
+                  WLR_RENDERER_ALLOW_SOFTWARE = "1";
+                })
+                // (spec.env or { });
 
               # Match any virtio network interface
               systemd.network.networks."10-lan" = {
@@ -373,6 +375,7 @@ in
   gemini = mkRunner vms.gemini;
   opencode = mkRunner vms.opencode;
   pi = mkRunner vms.pi;
+  bv = mkRunner vms.bv;
   antigravity = mkRunner vms.antigravity;
   crush = mkRunner vms.crush;
   default = mkRunner vms.claude;
