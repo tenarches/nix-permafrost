@@ -144,6 +144,7 @@ let
       };
       env = {
         LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
+        PI_CODING_AGENT_SESSION_DIR = "/home/agent/bv/sessions";
       };
     };
 
