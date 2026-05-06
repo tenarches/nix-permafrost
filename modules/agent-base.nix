@@ -117,6 +117,7 @@
     gzip
     xz
     tmux
+    jq
     # GUI Support libraries (Mesa/GL)
     mesa
     libGL
