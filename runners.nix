@@ -120,6 +120,8 @@ let
 
               environment.systemPackages = spec.extraPackages;
 
+              home-manager.users.agent.home.file = spec.homeFiles or { };
+
               # Dynamically map persistent shares into /home/agent
               systemd.tmpfiles.rules =
                 (map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (

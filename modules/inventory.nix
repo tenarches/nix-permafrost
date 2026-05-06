@@ -146,6 +146,92 @@ let
         LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
         PI_CODING_AGENT_SESSION_DIR = "/home/agent/bv/sessions";
       };
+
+      homeFiles = {
+        ".mcporter/mcporter.json".text = builtins.toJSON {
+          mcpServers = {
+            context7 = {
+              command = "context7-mcp";
+              args = [ ];
+            };
+            github = {
+              command = "github-mcp-server";
+              args = [ ];
+              env = {
+                GITHUB_PERSONAL_ACCESS_TOKEN = "\${GITHUB_TOKEN}";
+              };
+            };
+            nixos = {
+              command = "mcp-nixos";
+              args = [ ];
+            };
+            time = {
+              command = "mcp-server-time";
+              args = [ ];
+            };
+          };
+        };
+
+        ".pi/agent/models.json".text = builtins.toJSON {
+          providers = {
+            llama-cpp-local = {
+              name = "llama-cpp (dualie)";
+              baseUrl = "http://dualie.home.lan:8001/v1";
+              apiKey = "not-required";
+              api = "openai-completions";
+              compat = {
+                supportsDeveloperRole = false;
+                supportsReasoningEffort = false;
+              };
+              models = [
+                {
+                  id = "qwen3.6-35b-a3b-coding-agent-64k";
+                  name = "Qwen 3.6 35B Verifier (64k)";
+                }
+                {
+                  id = "qwen3.6-verifier-128k";
+                  name = "Qwen 3.6 35B Verifier (128k)";
+                }
+              ];
+            };
+          };
+        };
+
+        "bv/verifier/extensions/verifier-provider.ts".text = ''
+          import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+          export default function (pi: ExtensionAPI) {
+            pi.registerProvider("llama-cpp-local", {
+              name: "llama-cpp (dualie)",
+              baseUrl: "http://dualie.home.lan:8001/v1",
+              apiKey: "not-required",
+              api: "openai-completions",
+
+              compat: {
+                supportsDeveloperRole: false,
+                supportsReasoningEffort: false,
+              },
+
+              models: [
+                {
+                  id: "qwen3.6-35b-a3b-coding-agent-64k",
+                  name = "Qwen 3.6 35B Verifier (64k)",
+                  contextWindow = 65536,
+                  input: ["text"],
+                  reasoning: false,
+                },
+                {
+                  id = "qwen3.6-verifier-128k",
+                  name = "Qwen 3.6 35B Verifier (128k)",
+                  contextWindow = 131072,
+                  input: ["text"],
+                  reasoning: false,
+                },
+              ],
+            });
+          }
+        '';
+      };
     };
 
     antigravity = {
