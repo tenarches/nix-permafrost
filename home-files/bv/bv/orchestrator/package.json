@@ -1,0 +1,11 @@
+{
+  "name": "bv-orchestrator",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx orchestrator.ts"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
