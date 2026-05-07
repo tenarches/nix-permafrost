@@ -169,8 +169,14 @@ let
             bvFiles + "/bv/verifier/extensions/readonly-enforcer.ts";
           "bv/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
           "bv/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
-          "bv/orchestrator/coordinator.sh".source = bvFiles + "/bv/orchestrator/coordinator.sh";
-          "bv/orchestrator/init-bv.sh".source = bvFiles + "/bv/orchestrator/init-bv.sh";
+          "bv/orchestrator/coordinator.sh" = {
+            source = bvFiles + "/bv/orchestrator/coordinator.sh";
+            executable = true;
+          };
+          "bv/orchestrator/init-bv.sh" = {
+            source = bvFiles + "/bv/orchestrator/init-bv.sh";
+            executable = true;
+          };
           "bv/orchestrator/orchestrator.ts".source = bvFiles + "/bv/orchestrator/orchestrator.ts";
           "bv/orchestrator/notify.ts".source = bvFiles + "/bv/orchestrator/notify.ts";
           "bv/orchestrator/notify-config.ts".source = bvFiles + "/bv/orchestrator/notify-config.ts";
