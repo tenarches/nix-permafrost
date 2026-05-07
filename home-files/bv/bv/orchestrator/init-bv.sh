@@ -9,33 +9,34 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 0
 fi
 
-# Create session and first pane (Builder)
+# Create session and first pane
 tmux new-session -d -s "$SESSION" -n "workflow"
 tmux rename-window -t "$SESSION:0" "coding"
 
-# Split horizontally for Verifier (Pane 2)
-tmux split-window -h -t "$SESSION:0.0"
-
-# Split Pane 0 vertically for Coordinator (Pane 1)
+# 1. Split vertically (Top/Bottom)
+# 0.0 (Top), 0.1 (Bottom)
 tmux split-window -v -t "$SESSION:0.0"
 
-# Split Pane 1 horizontally for Log Watcher (Pane 3)
+# 2. Split Top pane horizontally (Top-Left/Top-Right)
+# 0.0 (Top-Left), 0.2 (Top-Right), 0.1 (Bottom)
+tmux split-window -h -t "$SESSION:0.0"
+
+# 3. Split Bottom pane horizontally (Bottom-Left/Bottom-Right)
+# 0.0 (Top-Left), 0.2 (Top-Right), 0.1 (Bottom-Left), 0.3 (Bottom-Right)
 tmux split-window -h -t "$SESSION:0.1"
 
-# Layout:
-# +---------+---------+
-# | Builder | Verifier|
-# | (0.0)   | (0.2)   |
-# +---------+---------+
-# | Coord   | Log     |
-# | (0.1)   | (0.3)   |
-# +---------+---------+
+# Layout Summary:
+# +-------------------+-------------------+
+# |  Builder (0.0)    |  Verifier (0.2)   |
+# +-------------------+-------------------+
+# |  Coordinator (0.1)|  Log Watcher (0.3)|
+# +-------------------+-------------------+
 
 # Start the agents in their panes
-tmux send-keys -t "$SESSION:0.0" "pi" Enter
-tmux send-keys -t "$SESSION:0.2" "pi" Enter
+tmux send-keys -t "$SESSION:0.0" "cd ~/bv/builder && pi" Enter
+tmux send-keys -t "$SESSION:0.2" "cd ~/bv/verifier && pi" Enter
 tmux send-keys -t "$SESSION:0.1" "cd ~/bv/orchestrator && clear" Enter
 tmux send-keys -t "$SESSION:0.3" "tail -f ~/bv/sessions/*.jsonl 2>/dev/null" Enter
 
 echo "BV Layout initialized. Attach with: tmux attach -t $SESSION"
-echo "Then run the coordinator in Pane 1 (bottom-left)."
+echo "Then run the coordinator in the bottom-left pane (0.1)."
