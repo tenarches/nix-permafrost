@@ -48,12 +48,17 @@ Directories declared in `persistentShares` map host paths into the guest. These 
 The `bv` agent is the project's flagship "Agentic Harness." It implements an autonomous dual-agent architecture (Gemini Builder + Qwen Verifier).
 
 ### Initial Setup
-Inside the `bv` VM, you must perform a one-time setup for the orchestrator dependencies:
-```bash
-cd ~/bv/orchestrator
-npm install
-```
-*Note: The guest has internet access via host NAT for this step.*
+Inside the `bv` VM, you must perform a one-time setup for the orchestrator dependencies and authentication:
+1.  **Install dependencies:**
+    ```bash
+    cd ~/bv/orchestrator
+    npm install
+    ```
+2.  **Authenticate with Google (Gemini):**
+    ```bash
+    pi /login
+    ```
+    *Follow the OAuth flow to link your Google subscription. This token is shared between the Builder and Verifier.*
 
 ### Mode 1: Interactive (TMUX)
 Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.
@@ -63,23 +68,29 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
     cd ~/bv/orchestrator
     ./init-bv.sh
     ```
-    This creates a tmux session named `bv` with the Builder (top-left), Verifier (top-right), Coordinator (bottom-left), and Log Watcher (bottom-right).
+    This creates a tmux session named `bv` with the following layout:
+    - **Top-Left (0.0):** Builder Agent (`pi`)
+    - **Top-Right (0.2):** Verifier Agent (`pi`)
+    - **Bottom-Left (0.1):** Coordinator Script
+    - **Bottom-Right (0.3):** Live Session Log Watcher
 
 2.  **Attach to Session:**
     ```bash
     tmux attach -t bv
     ```
-    *Note: You are now inside the 4-pane layout.*
 
-3.  **Run Coordinator (in the bottom-left pane):**
+3.  **Run a Task:**
+    In the **bottom-left pane (0.1)**, run:
     ```bash
     ./coordinator.sh path/to/task.md
     ```
     The coordinator will:
-    - Send the task to the Builder (top-left).
-    - Wait for the Builder to finish the turn.
-    - Automatically trigger the Verifier (top-right) to audit the session log.
-    - Stream progress in the Log Watcher (bottom-right).
+    - Paste the task into the Builder's prompt (top-left).
+    - Wait for the Builder to finish (watching the filesystem for JSONL updates).
+    - Paste the audit prompt into the Verifier (top-right).
+    - Display progress in the Log Watcher (bottom-right).
+
+*Tip: If the coordinator hangs at "Waiting for session...", ensure the Builder has actually started and is receiving input.*
 
 ### Mode 2: Headless (Orchestrator)
 Best for automated implementation and verification.
