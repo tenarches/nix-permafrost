@@ -3,10 +3,18 @@
 # Waits for the builder to finish a turn, then fires the verifier.
 
 SESSIONS_DIR="$HOME/bv/sessions"
-VERIFIER_PANE="bv:0.2"
-BUILDER_PANE="bv:0.0"
+SESSION_NAME="bv"
+VERIFIER_PANE="$SESSION_NAME:0.2"
+BUILDER_PANE="$SESSION_NAME:0.0"
 
 task_file="${1:?Usage: coordinator.sh <task-file>}"
+
+if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  echo "[error] tmux session '$SESSION_NAME' not found."
+  echo "        Run './init-bv.sh' first."
+  exit 1
+fi
+
 task=$(cat "$task_file")
 
 # Send task to builder

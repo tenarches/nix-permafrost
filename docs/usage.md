@@ -56,14 +56,30 @@ npm install
 *Note: The guest has internet access via host NAT for this step.*
 
 ### Mode 1: Interactive (TMUX)
-Best for watching the agents work or debugging prompts.
-1.  **Launch TMUX:** `tmux new-session -s bv`
-2.  **Run Coordinator:**
+Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.
+
+1.  **Initialize Layout:**
     ```bash
     cd ~/bv/orchestrator
+    ./init-bv.sh
+    ```
+    This creates a tmux session named `bv` with the Builder (top-left), Verifier (top-right), Coordinator (bottom-left), and Log Watcher (bottom-right).
+
+2.  **Attach to Session:**
+    ```bash
+    tmux attach -t bv
+    ```
+    *Note: You are now inside the 4-pane layout.*
+
+3.  **Run Coordinator (in the bottom-left pane):**
+    ```bash
     ./coordinator.sh path/to/task.md
     ```
-    The coordinator manages the handoff between the Builder (Pane 0.0) and the Verifier (Pane 0.1).
+    The coordinator will:
+    - Send the task to the Builder (top-left).
+    - Wait for the Builder to finish the turn.
+    - Automatically trigger the Verifier (top-right) to audit the session log.
+    - Stream progress in the Log Watcher (bottom-right).
 
 ### Mode 2: Headless (Orchestrator)
 Best for automated implementation and verification.
