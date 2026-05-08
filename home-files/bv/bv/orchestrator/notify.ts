@@ -1,5 +1,6 @@
 import crypto from "crypto";
-import { NotifyConfig, loadNotifyConfig } from "./notify-config.js";
+import { type NotifyConfig, loadNotifyConfig } from "./notify-config.js";
+import type { IncomingCommand } from "./command-listener.js";
 
 export type NotificationStage = "INIT" | "BUILD" | "LINT" | "VERIFY" | "DONE" | "ESCALATE";
 export type NotificationEventType =
@@ -27,7 +28,7 @@ export class NotificationBus {
   private sessionId: string;
   private retryCount = 0;
   private config: NotifyConfig;
-  private commandQueue: any[] = [];
+  private commandQueue: IncomingCommand[] = [];
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -36,7 +37,13 @@ export class NotificationBus {
 
   setRetryCount(n: number): void { this.retryCount = n; }
 
-  emit(stage: NotificationStage, type: NotificationEventType, message: string, payload?: Record<string, unknown>, level: NotificationLevel = "info"): void {
+  emit(
+    stage: NotificationStage,
+    type: NotificationEventType,
+    message: string,
+    payload?: Record<string, unknown>,
+    level: NotificationLevel = "info",
+  ): void {
     const event: NotificationEvent = {
       id: crypto.randomUUID(),
       session_id: this.sessionId,
@@ -45,20 +52,60 @@ export class NotificationBus {
       retry_count: this.retryCount,
       payload,
     };
+
     process.stderr.write(`[${event.timestamp}] [${stage}] [${type}] ${message}\n`);
-    if (this.config.webhookUrl) {
-      this.fireWebhook(event).catch(() => {});
+
+    if (this.config.webhookUrl && this.shouldNotify(type)) {
+      this.fireWebhook(event).catch((err) => {
+        process.stderr.write(`[NOTIFY] Webhook delivery failed (non-fatal): ${err}\n`);
+      });
     }
   }
 
-  enqueueCommand(cmd: any): void { this.commandQueue.push(cmd); }
+  drainCommands(): IncomingCommand[] {
+    const cmds = [...this.commandQueue];
+    this.commandQueue = [];
+    return cmds;
+  }
+
+  enqueueCommand(cmd: IncomingCommand): void {
+    this.commandQueue.push(cmd);
+    this.emit("INIT", "command.received", `Command received: ${cmd.command}`, {
+      command: cmd.command,
+      has_message: !!cmd.message,
+    });
+  }
+
+  private shouldNotify(type: NotificationEventType): boolean {
+    const { eventFilter } = this.config;
+    if (!eventFilter || eventFilter.length === 0) return true;
+    return eventFilter.includes(type);
+  }
 
   private async fireWebhook(event: NotificationEvent): Promise<void> {
-    // Implementation details simplified for Nix string inclusion
-    await fetch(this.config.webhookUrl!, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    });
+    const { webhookUrl, webhookSecret, timeoutMs = 5000, retries = 3 } = this.config;
+
+    const body = JSON.stringify(event);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+    if (webhookSecret) {
+      const sig = crypto.createHmac("sha256", webhookSecret).update(body).digest("hex");
+      headers["X-BV-Signature"] = `sha256=${sig}`;
+    }
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(webhookUrl!, { method: "POST", headers, body, signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) return;
+        process.stderr.write(`[NOTIFY] Webhook attempt ${attempt}/${retries}: HTTP ${res.status}\n`);
+      } catch (err) {
+        clearTimeout(timer);
+        if (attempt === retries) throw err;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+      }
+    }
   }
 }

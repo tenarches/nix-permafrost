@@ -4,12 +4,16 @@ import {
   ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, access } from "fs/promises";
 import { join } from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import crypto from "crypto";
 import { NotificationBus } from "./notify.js";
-import { CommandListener } from "./command-listener.js";
+import { CommandListener, type IncomingCommand } from "./command-listener.js";
 import { loadNotifyConfig } from "./notify-config.js";
+
+const execFileAsync = promisify(execFile);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -69,6 +73,8 @@ export class Orchestrator {
   private bus: NotificationBus;
   private commandListener: CommandListener | null = null;
   private abortRequested = false;
+  private pauseRequested = false;
+  private pendingInjects: string[] = [];
 
   constructor(task: string) {
     this.task = task;
@@ -106,14 +112,15 @@ export class Orchestrator {
     const authStorage = AuthStorage.create();
     const modelRegistry = ModelRegistry.create(authStorage);
 
+    const builderModel = modelRegistry.find("google-generative-ai", BUILDER_MODEL);
+    if (!builderModel) throw new Error(`Model not found: ${BUILDER_MODEL}`);
+
     const { session } = await createAgentSession({
-      sessionManager: SessionManager.fromDirectory(SESSIONS_DIR),
+      sessionManager: SessionManager.create(BUILDER_CWD, SESSIONS_DIR),
       authStorage,
       modelRegistry,
-      model: BUILDER_MODEL,
+      model: builderModel,
       cwd: BUILDER_CWD,
-      extensionDirs: [join(BUILDER_CWD, "extensions")],
-      settingsDir: join(BUILDER_CWD, ".pi"),
     });
 
     this.builderSession = session;
@@ -158,24 +165,65 @@ export class Orchestrator {
   private async build(feedbackPrompt?: string): Promise<void> {
     if (this.abortRequested) await this.escalate("Abort requested by user.");
 
+    const injected = this.pendingInjects.splice(0).join("\n\n");
     const label = feedbackPrompt
       ? `retry ${this.retryCount}/${MAX_RETRIES}`
       : "initial";
     this.bus.emit("BUILD", "build.started", `Starting build phase (${label})`);
 
-    const prompt = feedbackPrompt
+    const basePrompt = feedbackPrompt
       ? `VERIFIER FEEDBACK (attempt ${this.retryCount}/${MAX_RETRIES}):\n\n${feedbackPrompt}\n\nAddress all feedback. Provide an updated COMPLETION SUMMARY.`
       : this.task;
+    const prompt = injected ? `${injected}\n\n---\n\n${basePrompt}` : basePrompt;
 
     await this.builderSession.prompt(prompt);
     this.bus.emit("BUILD", "build.completed", "Builder turn complete");
+    await this.drainCommands();
   }
 
   private async lint(): Promise<void> {
     this.bus.emit("LINT", "lint.started", "Running deterministic checks");
     const projectCwd = join(HOME, "workspace");
-    // simplified lint check for brevity
-    this.bus.emit("LINT", "lint.passed", "All lint checks passed");
+
+    const checks: Array<{ name: string; cmd: string; args: string[]; guard: string }> = [
+      { name: "tsc", cmd: "npx", args: ["tsc", "--noEmit"], guard: "tsconfig.json" },
+      { name: "eslint", cmd: "npx", args: ["eslint", "src/", "--max-warnings", "0"], guard: ".eslintrc" },
+    ];
+
+    const failed: Array<{ name: string; output: string }> = [];
+    for (const check of checks) {
+      try {
+        await access(join(projectCwd, check.guard));
+      } catch {
+        continue;
+      }
+      try {
+        await execFileAsync(check.cmd, check.args, { cwd: projectCwd, timeout: 120_000 });
+      } catch (err: any) {
+        failed.push({ name: check.name, output: String(err.stderr || err.stdout || err.message).slice(0, 1000) });
+      }
+    }
+
+    if (failed.length === 0) {
+      this.bus.emit("LINT", "lint.passed", "All lint checks passed");
+      await this.drainCommands();
+      return;
+    }
+
+    const names = failed.map((f) => f.name).join(", ");
+    this.bus.emit("LINT", "lint.failed", `Lint failed: ${names}`, { failed }, "warn");
+    await this.drainCommands();
+
+    if (this.retryCount >= MAX_RETRIES) {
+      await this.escalate(`Lint loop hit max retries. Failing: ${names}`);
+      return;
+    }
+
+    this.retryCount++;
+    this.bus.setRetryCount(this.retryCount);
+    const feedback = `LINT FAILURE:\n${failed.map((f) => `- ${f.name} failed:\n${f.output}`).join("\n\n")}\n\nFix all lint errors before resubmitting.`;
+    await this.build(feedback);
+    await this.lint();
   }
 
   private async verify(): Promise<void> {
@@ -192,11 +240,13 @@ export class Orchestrator {
 
     if (report.status === "PASSED") {
       this.bus.emit("VERIFY", "verify.passed", `PASSED — ${report.report.verified}/${report.report.total_claims} claims verified`);
+      await this.drainCommands();
       this.done();
       return;
     }
 
-    this.bus.emit("VERIFY", "verify.failed", `FAILED — ${report.report.failed} failed, ${report.report.unverified} unverified`, { report: report.report });
+    this.bus.emit("VERIFY", "verify.failed", `FAILED — ${report.report.failed} failed, ${report.report.unverified} unverified`, { report: report.report }, "warn");
+    await this.drainCommands();
 
     if (this.retryCount >= MAX_RETRIES) {
       await this.escalate(`Verifier failed after ${MAX_RETRIES} retries`);
@@ -208,6 +258,44 @@ export class Orchestrator {
     await this.build(report.report.feedback_for_builder ?? "Verification failed.");
     await this.lint();
     await this.verify();
+  }
+
+  private async drainCommands(): Promise<void> {
+    const cmds = this.bus.drainCommands();
+    for (const cmd of cmds) this.handleCommand(cmd);
+
+    while (this.pauseRequested) {
+      process.stderr.write("[PAUSE] Paused. Awaiting 'continue' command...\n");
+      await new Promise((r) => setTimeout(r, 2000));
+      const newCmds = this.bus.drainCommands();
+      for (const c of newCmds) this.handleCommand(c);
+    }
+  }
+
+  private handleCommand(cmd: IncomingCommand): void {
+    switch (cmd.command) {
+      case "abort":
+        this.abortRequested = true;
+        this.bus.emit("INIT", "command.received", "Abort requested", {}, "warn");
+        break;
+      case "pause":
+        this.pauseRequested = true;
+        break;
+      case "continue":
+        this.pauseRequested = false;
+        break;
+      case "inject":
+        if (cmd.message) {
+          this.pendingInjects.push(cmd.message);
+          this.bus.emit("BUILD", "command.received", `Inject queued: "${cmd.message.slice(0, 60)}..."`);
+        }
+        break;
+      case "status":
+        this.bus.emit("BUILD", "command.received",
+          `Status: retry=${this.retryCount}/${MAX_RETRIES}`,
+          { retry_count: this.retryCount, last_report_status: this.lastReport?.status ?? null });
+        break;
+    }
   }
 
   private done(): void {
@@ -228,18 +316,19 @@ export class Orchestrator {
     return readFile(join(SESSIONS_DIR, files[files.length - 1]), "utf-8");
   }
 
-  private async runVerifier(sessionContent: string, model: string): Promise<VerifierReport> {
+  private async runVerifier(sessionContent: string, modelId: string): Promise<VerifierReport> {
     const authStorage = AuthStorage.create();
     const modelRegistry = ModelRegistry.create(authStorage);
+
+    const verifierModel = modelRegistry.find("llama-cpp-local", modelId);
+    if (!verifierModel) throw new Error(`Verifier model not found: ${modelId}`);
 
     const { session } = await createAgentSession({
       sessionManager: SessionManager.inMemory(),
       authStorage,
       modelRegistry,
-      model,
+      model: verifierModel,
       cwd: VERIFIER_CWD,
-      extensionDirs: [join(VERIFIER_CWD, "extensions")],
-      settingsDir: join(VERIFIER_CWD, ".pi"),
     });
 
     this.attachObserver(session, "VERIFY");
@@ -255,7 +344,7 @@ export class Orchestrator {
     ].join("\n");
 
     await session.prompt(prompt);
-    const raw = await session.getLastAssistantText?.() ?? "";
+    const raw = session.getLastAssistantText() ?? "";
     return this.parseReport(raw);
   }
 

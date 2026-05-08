@@ -1,8 +1,4 @@
-{
-  inputs,
-  pkgs,
-  ...
-}:
+{ inputs, pkgs, ... }:
 
 let
   inherit (pkgs) lib;
@@ -156,17 +152,16 @@ let
           ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
           ".pi/agent/models.json".source = bvFiles + "/.pi/agent/models.json";
           "bv/notify.json".source = bvFiles + "/bv/notify.json";
-          "bv/builder/.pi/settings.json".source = bvFiles + "/bv/builder/.pi/settings.json";
           "bv/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
-          "bv/builder/extensions/bash-lockdown.ts".source =
-            bvFiles + "/bv/builder/extensions/bash-lockdown.ts";
-          "bv/builder/skills/prime.md".source = bvFiles + "/bv/builder/skills/prime.md";
-          "bv/builder/skills/mcporter.md".source = bvFiles + "/bv/builder/skills/mcporter.md";
+          "bv/builder/.pi/extensions/bash-lockdown.ts".source =
+            bvFiles + "/bv/builder/.pi/extensions/bash-lockdown.ts";
+          "bv/builder/.pi/skills/prime.md".source = bvFiles + "/bv/builder/.pi/skills/prime.md";
+          "bv/builder/.pi/skills/mcporter.md".source = bvFiles + "/bv/builder/.pi/skills/mcporter.md";
           "bv/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
-          "bv/verifier/extensions/verifier-provider.ts".source =
-            bvFiles + "/bv/verifier/extensions/verifier-provider.ts";
-          "bv/verifier/extensions/readonly-enforcer.ts".source =
-            bvFiles + "/bv/verifier/extensions/readonly-enforcer.ts";
+          "bv/verifier/.pi/extensions/verifier-provider.ts".source =
+            bvFiles + "/bv/verifier/.pi/extensions/verifier-provider.ts";
+          "bv/verifier/.pi/extensions/readonly-enforcer.ts".source =
+            bvFiles + "/bv/verifier/.pi/extensions/readonly-enforcer.ts";
           "bv/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
           "bv/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
           "bv/orchestrator/coordinator.sh" = {
@@ -218,9 +213,7 @@ let
           guest = ".local/share/crush";
         }
       ];
-      extraPackages = [
-        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush
-      ];
+      extraPackages = [ inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush ];
     };
   };
 
@@ -229,7 +222,6 @@ let
   allCids = map (s: s.vsockCid) allSpecs;
 
 in
-
 assert lib.assertMsg (builtins.all (id: builtins.stringLength id <= 7) allTapIds)
   "inventory: one or more tapId values exceed 7 characters (max for IFNAMSIZ with 'microvm-' prefix)";
 
