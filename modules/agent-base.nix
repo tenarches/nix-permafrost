@@ -31,6 +31,39 @@
     # Ephemeral state via microvm.writableStoreOverlay
     # This gives the guest a writable overlay atop the host's read-only Nix store share.
     writableStoreOverlay = "/nix/.rw-store";
+
+    # Holistic Credential Injection for Cloud-Hypervisor
+    # Since cloud-hypervisor does not support SMBIOS-based credential injection (standard in microvm.nix),
+    # we use the --platform oem_string mechanism to pass secrets. This script reads the
+    # host-side credential files and formats them into a single --platform flag.
+    extraArgsScript =
+      let
+        cfg = config.microvm;
+        isCLH = cfg.hypervisor == "cloud-hypervisor";
+        hasCreds = cfg.credentialFiles != { };
+      in
+      lib.mkIf (isCLH && hasCreds) (
+        let
+          credEntries = lib.mapAttrsToList (name: path: { inherit name path; }) cfg.credentialFiles;
+
+          readCredsScript = lib.concatMapStrings (
+            { name, path }:
+            ''
+              if [ ! -r "${path}" ]; then
+                echo "agent-base: cannot read '${path}' for credential '${name}'" >&2
+                exit 1
+              fi
+              _val=$(cat "${path}")
+              _oem_parts="''${_oem_parts:+''${_oem_parts},}io.systemd.credential:${name}=''${_val}"
+            ''
+          ) credEntries;
+        in
+        ''
+          _oem_parts=""
+          ${readCredsScript}
+          printf -- '--platform oem_string=[%s]' "$_oem_parts"
+        ''
+      );
   };
 
   fileSystems = {
