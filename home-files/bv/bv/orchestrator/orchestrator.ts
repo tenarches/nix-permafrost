@@ -3,7 +3,7 @@ import {
   createAgentSession,
   ModelRegistry,
   SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import crypto from "crypto";
