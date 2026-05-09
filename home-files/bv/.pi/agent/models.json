@@ -1,6 +1,6 @@
 {
   "providers": {
-    "llama-cpp-local": {
+    "llama-cpp-local-bv": {
       "name": "llama-cpp",
       "baseUrl": "http://dualie.home.lan:8001/v1",
       "apiKey": "not-required",
@@ -12,11 +12,35 @@
       "models": [
         {
           "id": "qwen3.6-35b-a3b-coding-agent-64k",
-          "name": "Qwen 3.6 35B Verifier (64k)"
+          "name": "Qwen 3.6 35B Verifier (64k)",
+          "contextWindow": 64000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
         {
           "id": "qwen3.6-verifier-128k",
-          "name": "Qwen 3.6 35B Verifier (128k)"
+          "name": "Qwen 3.6 35B Verifier (128k)",
+          "contextWindow": 128000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    },
+    "llama-cpp-local": {
+      "name": "llama-cpp",
+      "baseUrl": "http://dualie.home.lan:8001/v1",
+      "apiKey": "not-required",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "qwen3.6-35b-a3b-coding-agent-64k",
+          "name": "Qwen 3.6 35B Verifier (64k)",
+          "contextWindow": 64000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        },
+        {
+          "id": "qwen3.6-verifier-128k",
+          "name": "Qwen 3.6 35B Verifier (128k)",
+          "contextWindow": 128000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
     }

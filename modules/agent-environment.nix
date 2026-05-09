@@ -9,9 +9,15 @@
 
     # MCP Servers and tools
     home.packages = with pkgs; [
+      devenv
       uv
       nodejs
     ];
+
+    programs.direnv = {
+      enable = true;
+      nix-direnv.enable = true;
+    };
 
     programs.tmux = {
       enable = true;

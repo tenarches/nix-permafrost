@@ -5,6 +5,8 @@ let
     inherit system;
     config.allowUnfree = true;
     overlays = [
+      # Centralized Devenv integration
+      (import ./overlays/devenv.nix { inherit inputs; })
       # Centralized Python MCP overrides
       (import ./overlays/python-mcp.nix)
       # MCP server packages — evaluated against patched pkgs
@@ -44,6 +46,7 @@ let
                 hostPlatform = system;
                 config.allowUnfree = true;
                 overlays = [
+                  (import ./overlays/devenv.nix { inherit inputs; })
                   (import ./overlays/python-mcp.nix)
                   inputs.mcp-servers-nix.overlays.default
                 ]

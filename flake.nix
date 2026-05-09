@@ -88,6 +88,7 @@
           devShells.default = pkgs.mkShell {
             shellHook = config.pre-commit.installationScript;
             packages = [
+              pkgs.devenv
               pkgs.sops
               pkgs.age
               pkgs.virtiofsd
@@ -114,6 +115,8 @@
             {
               nixpkgs = {
                 overlays = [
+                  # Centralized Devenv integration
+                  (import ./overlays/devenv.nix { inherit inputs; })
                   # Centralized Python MCP overrides
                   (import ./overlays/python-mcp.nix)
                   # MCP server packages — evaluated against patched pkgs
