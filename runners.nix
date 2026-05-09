@@ -243,42 +243,13 @@ let
 
         cleanup() {
           echo "Permafrost: cleaning up ${spec.name}..."
-
-          if [ -n "$EXT_IF_AT_LAUNCH" ]; then
-            ${pkgs.iptables}/bin/iptables -t nat -D POSTROUTING \
-              -s 192.168.33.0/24 -o "$EXT_IF_AT_LAUNCH" -j MASQUERADE 2>/dev/null || true
-            ${pkgs.iptables}/bin/iptables -D FORWARD \
-              -i "$BRIDGE" -j ACCEPT 2>/dev/null || true
-            ${pkgs.iptables}/bin/iptables -D FORWARD \
-              -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-          fi
-
-          # Remove bridge only if no tap interfaces remain attached
-          if ip link show "$BRIDGE" >/dev/null 2>&1; then
-            ATTACHED=$(ls /sys/class/net/"$BRIDGE"/brif 2>/dev/null | wc -l)
-            if [ "$ATTACHED" -eq 0 ]; then
-              ip link set "$BRIDGE" down 2>/dev/null || true
-              ip link del "$BRIDGE" 2>/dev/null || true
-              echo "Permafrost: bridge $BRIDGE removed."
-            else
-              echo "Permafrost: bridge $BRIDGE still has $ATTACHED attached interface(s); leaving in place."
-            fi
-          fi
-
+          # Note: Host-side bridge and NAT are managed declaratively in modules/host.nix.
+          # We do not perform JIT cleanup here to avoid dropping connectivity for other VMs.
           echo "Permafrost: cleanup complete for ${spec.name}."
         }
 
         if [ "$COMMAND" = "run" ]; then
           trap cleanup EXIT INT TERM
-        fi
-
-        if [ -n "$EXT_IF" ]; then
-          ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
-            ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE
-          ${pkgs.iptables}/bin/iptables -C FORWARD -i "$BRIDGE" -j ACCEPT 2>/dev/null || \
-            ${pkgs.iptables}/bin/iptables -A FORWARD -i "$BRIDGE" -j ACCEPT
-          ${pkgs.iptables}/bin/iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-            ${pkgs.iptables}/bin/iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
         fi
 
         # Background TAP attachment
