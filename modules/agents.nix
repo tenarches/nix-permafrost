@@ -32,7 +32,14 @@ let
             tag = "wayland";
             proto = "virtiofs";
           }
-        ]);
+        ])
+        ++ (map (s: {
+          source = "/mnt/persist/${s.guest}";
+          mountPoint = "/mnt/persist/${s.guest}";
+          # Hash the guest path to stay within the 36-char virtiofs tag limit
+          tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
+          proto = "virtiofs";
+        }) (spec.persistentShares or [ ]));
 
         vsock.cid = spec.vsockCid;
         interfaces = [

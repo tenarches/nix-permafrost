@@ -74,11 +74,12 @@ let
                   ++ (map (s: {
                     source = "host-managed-virtiofsd-at-${s.host}";
                     mountPoint = "/mnt/persist/${s.guest}";
-                    tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+                    # Hash the guest path to stay within the 36-char virtiofs tag limit
+                    tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
                     proto = "virtiofs";
                     socket =
-                      "/run/microvm-${spec.name}/persist_"
-                      + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest)
+                      "/run/microvm-${spec.name}/p_"
+                      + (builtins.substring 0 30 (builtins.hashString "md5" s.guest))
                       + ".sock";
                   }) allShares)
                   ++ (lib.optionals (spec.gui or false) [
@@ -308,7 +309,7 @@ let
           ${lib.concatMapStringsSep "\n" (
             s:
             let
-              tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+              tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
             in
             ''
               ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -324,7 +325,7 @@ let
           ${lib.concatMapStringsSep "\n" (
             s:
             let
-              tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+              tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
             in
             ''while [ ! -S "$SOCKET_DIR/${tag}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
           ) allShares}
