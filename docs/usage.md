@@ -51,7 +51,7 @@ The `bv` agent is the project's flagship "Agentic Harness." It implements an aut
 Inside the `bv` VM, you must perform a one-time setup for the orchestrator dependencies and authentication:
 1.  **Install dependencies:**
     ```bash
-    cd ~/bv/orchestrator
+    cd ~/.bv-logic/orchestrator
     npm install
     ```
 2.  **Authenticate with Google (Gemini):**
@@ -65,7 +65,7 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
 
 1.  **Initialize Layout:**
     ```bash
-    cd ~/bv/orchestrator
+    cd ~/.bv-logic/orchestrator
     ./init-bv.sh
     ```
     This creates a tmux session named `bv` with the following layout:
@@ -95,7 +95,7 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
 ### Mode 2: Headless (Orchestrator)
 Best for automated implementation and verification.
 ```bash
-cd ~/bv/orchestrator
+cd ~/.bv-logic/orchestrator
 npm start -- --task "Implement a JWT authentication service"
 ```
 
