@@ -13,6 +13,12 @@ fi
 tmux new-session -d -s "$SESSION" -n "workflow"
 tmux rename-window -t "$SESSION:0" "coding"
 
+# Configure visual style for this session immediately
+tmux set-option -t "$SESSION" pane-border-status top
+tmux set-option -t "$SESSION" pane-border-format " #[fg=black,bg=cyan,bold] #T #[default] "
+tmux set-option -t "$SESSION" pane-active-border-style fg=cyan
+tmux set-option -t "$SESSION" pane-border-style fg=white
+
 # 1. Split vertically (Top/Bottom)
 # 0.0 (Top), 0.1 (Bottom)
 tmux split-window -v -t "$SESSION:0.0"
@@ -49,8 +55,7 @@ tmux send-keys -t "$SESSION:0.1" "cd ~/.bv-logic/orchestrator && clear" Enter
 tmux select-pane -t "$SESSION:0.3" -T "SESSION LOG"
 tmux send-keys -t "$SESSION:0.3" "tail -F ~/bv/sessions/*.jsonl 2>/dev/null" Enter
 
-# Enable pane borders and titles globally for this session
-tmux set-option -t "$SESSION" pane-border-status top
-tmux set-option -t "$SESSION" pane-border-format " [ #T ] "
+# Focus the Coordinator pane as the default
+tmux select-pane -t "$SESSION:0.1"
 
 echo "BV Layout initialized. Attach with: tmux attach -t $SESSION"
