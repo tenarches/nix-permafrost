@@ -7,5 +7,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "overrides": {
+    "node-domexception": "1.0.0"
   }
 }
