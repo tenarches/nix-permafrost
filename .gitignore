@@ -29,6 +29,7 @@ hardware-configuration.nix.bak
 *.swp
 *~
 *.sync-conflict-*
+node_modules/
 
 # MicroVM Runtime Artifacts
 *.sock
