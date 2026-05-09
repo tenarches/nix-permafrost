@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node --import tsx orchestrator.ts"
+    "start": "node --preserve-symlinks --import tsx orchestrator.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0",
