@@ -129,11 +129,15 @@ let
           guest = ".mcporter";
         }
       ];
+      overlays = [
+        (_final: prev: {
+          nodejs = prev.nodejs_25;
+        })
+      ];
       extraPackages = [
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
-        pkgs.nodejs_25
-        pkgs.tsx
+        pkgs.nodejs
       ]
       ++ mcpServers;
       credentials = {

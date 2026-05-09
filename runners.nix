@@ -43,6 +43,11 @@ let
               nixpkgs = {
                 hostPlatform = system;
                 config.allowUnfree = true;
+                overlays = [
+                  (import ./overlays/python-mcp.nix)
+                  inputs.mcp-servers-nix.overlays.default
+                ]
+                ++ (spec.overlays or [ ]);
               };
               microvm = {
                 vsock.cid = spec.vsockCid;
