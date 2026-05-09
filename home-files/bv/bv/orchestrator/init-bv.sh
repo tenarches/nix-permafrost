@@ -33,9 +33,9 @@ tmux split-window -h -t "$SESSION:0.1"
 # +-------------------+-------------------+
 
 # Start the agents in their panes
-tmux send-keys -t "$SESSION:0.0" "cd ~/bv/builder && pi" Enter
-tmux send-keys -t "$SESSION:0.2" "cd ~/bv/verifier && pi" Enter
-tmux send-keys -t "$SESSION:0.1" "cd ~/bv/orchestrator && clear" Enter
+tmux send-keys -t "$SESSION:0.0" "cd ~/.bv-logic/builder && pi" Enter
+tmux send-keys -t "$SESSION:0.2" "cd ~/.bv-logic/verifier && pi" Enter
+tmux send-keys -t "$SESSION:0.1" "cd ~/.bv-logic/orchestrator && clear" Enter
 tmux send-keys -t "$SESSION:0.3" "tail -f ~/bv/sessions/*.jsonl 2>/dev/null" Enter
 
 echo "BV Layout initialized. Attach with: tmux attach -t $SESSION"

@@ -118,10 +118,14 @@ let
           host = ".pi";
           guest = ".pi";
         }
-        # Builder-verifier project tree: orchestrator, configs, sessions
+        # Builder-verifier project tree: persistent state (sessions, node_modules)
         {
-          host = "bv";
-          guest = "bv";
+          host = "bv/sessions";
+          guest = "bv/sessions";
+        }
+        {
+          host = "bv/node_modules";
+          guest = ".bv-logic/orchestrator/node_modules";
         }
         # mcporter MCP server configuration
         {
@@ -151,31 +155,32 @@ let
         {
           ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
           ".pi/agent/models.json".source = bvFiles + "/.pi/agent/models.json";
-          "bv/notify.json".source = bvFiles + "/bv/notify.json";
-          "bv/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
-          "bv/builder/.pi/extensions/bash-lockdown.ts".source =
+          ".bv-logic/notify.json".source = bvFiles + "/bv/notify.json";
+          ".bv-logic/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
+          ".bv-logic/builder/.pi/extensions/bash-lockdown.ts".source =
             bvFiles + "/bv/builder/.pi/extensions/bash-lockdown.ts";
-          "bv/builder/.pi/skills/prime.md".source = bvFiles + "/bv/builder/.pi/skills/prime.md";
-          "bv/builder/.pi/skills/mcporter.md".source = bvFiles + "/bv/builder/.pi/skills/mcporter.md";
-          "bv/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
-          "bv/verifier/.pi/extensions/verifier-provider.ts".source =
+          ".bv-logic/builder/.pi/skills/prime.md".source = bvFiles + "/bv/builder/.pi/skills/prime.md";
+          ".bv-logic/builder/.pi/skills/mcporter.md".source = bvFiles + "/bv/builder/.pi/skills/mcporter.md";
+          ".bv-logic/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
+          ".bv-logic/verifier/.pi/extensions/verifier-provider.ts".source =
             bvFiles + "/bv/verifier/.pi/extensions/verifier-provider.ts";
-          "bv/verifier/.pi/extensions/readonly-enforcer.ts".source =
+          ".bv-logic/verifier/.pi/extensions/readonly-enforcer.ts".source =
             bvFiles + "/bv/verifier/.pi/extensions/readonly-enforcer.ts";
-          "bv/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
-          "bv/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
-          "bv/orchestrator/coordinator.sh" = {
+          ".bv-logic/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
+          ".bv-logic/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
+          ".bv-logic/orchestrator/coordinator.sh" = {
             source = bvFiles + "/bv/orchestrator/coordinator.sh";
             executable = true;
           };
-          "bv/orchestrator/init-bv.sh" = {
+          ".bv-logic/orchestrator/init-bv.sh" = {
             source = bvFiles + "/bv/orchestrator/init-bv.sh";
             executable = true;
           };
-          "bv/orchestrator/orchestrator.ts".source = bvFiles + "/bv/orchestrator/orchestrator.ts";
-          "bv/orchestrator/notify.ts".source = bvFiles + "/bv/orchestrator/notify.ts";
-          "bv/orchestrator/notify-config.ts".source = bvFiles + "/bv/orchestrator/notify-config.ts";
-          "bv/orchestrator/command-listener.ts".source = bvFiles + "/bv/orchestrator/command-listener.ts";
+          ".bv-logic/orchestrator/orchestrator.ts".source = bvFiles + "/bv/orchestrator/orchestrator.ts";
+          ".bv-logic/orchestrator/notify.ts".source = bvFiles + "/bv/orchestrator/notify.ts";
+          ".bv-logic/orchestrator/notify-config.ts".source = bvFiles + "/bv/orchestrator/notify-config.ts";
+          ".bv-logic/orchestrator/command-listener.ts".source =
+            bvFiles + "/bv/orchestrator/command-listener.ts";
         };
     };
 

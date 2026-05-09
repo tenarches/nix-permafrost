@@ -17,7 +17,7 @@ export interface NotifyConfig {
 
 export function loadNotifyConfig(): NotifyConfig {
   const candidates = [
-    join(process.env.HOME ?? homedir(), "bv", "notify.json"),
+    join(process.env.HOME ?? homedir(), ".bv-logic", "notify.json"),
     join(process.cwd(), "notify.json"),
   ];
 

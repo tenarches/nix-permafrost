@@ -18,10 +18,12 @@ const execFileAsync = promisify(execFile);
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HOME = process.env.HOME ?? "/home/agent";
-const BV_DIR = join(HOME, "bv");
-const BUILDER_CWD = join(BV_DIR, "builder");
-const VERIFIER_CWD = join(BV_DIR, "verifier");
-const SESSIONS_DIR = join(BV_DIR, "sessions");
+const LOGIC_DIR = join(HOME, ".bv-logic");
+const DATA_DIR = join(HOME, "bv");
+
+const BUILDER_CWD = join(LOGIC_DIR, "builder");
+const VERIFIER_CWD = join(LOGIC_DIR, "verifier");
+const SESSIONS_DIR = join(DATA_DIR, "sessions");
 
 const BUILDER_MODEL = "gemini-2.5-pro-preview-06-05";
 const VERIFIER_MODEL_64K = "qwen3.6-35b-a3b-coding-agent-64k";
