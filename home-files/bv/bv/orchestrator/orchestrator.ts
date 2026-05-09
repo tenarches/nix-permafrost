@@ -20,6 +20,7 @@ const execFileAsync = promisify(execFile);
 const HOME = process.env.HOME ?? "/home/agent";
 const LOGIC_DIR = join(HOME, ".bv-logic");
 const DATA_DIR = join(HOME, "bv");
+const WORKSPACE_DIR = join(HOME, "workspace");
 
 const BUILDER_CWD = join(LOGIC_DIR, "builder");
 const VERIFIER_CWD = join(LOGIC_DIR, "verifier");
@@ -118,11 +119,12 @@ export class Orchestrator {
     if (!builderModel) throw new Error(`Model not found: ${BUILDER_MODEL}`);
 
     const { session } = await createAgentSession({
-      sessionManager: SessionManager.create(BUILDER_CWD, SESSIONS_DIR),
+      sessionManager: SessionManager.create(WORKSPACE_DIR, SESSIONS_DIR),
       authStorage,
       modelRegistry,
       model: builderModel,
-      cwd: BUILDER_CWD,
+      cwd: WORKSPACE_DIR,
+      settingsDir: BUILDER_CWD,
     });
 
     this.builderSession = session;
@@ -330,7 +332,8 @@ export class Orchestrator {
       authStorage,
       modelRegistry,
       model: verifierModel,
-      cwd: VERIFIER_CWD,
+      cwd: WORKSPACE_DIR,
+      settingsDir: VERIFIER_CWD,
     });
 
     this.attachObserver(session, "VERIFY");

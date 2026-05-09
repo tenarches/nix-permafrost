@@ -130,6 +130,13 @@
   # Enable passwordless sudo for the wheel group
   security.sudo.wheelNeedsPassword = false;
 
+  programs.tmux = {
+    enable = true;
+    extraConfig = ''
+      set -g extended-keys on
+    '';
+  };
+
   # Automatically symlink persistent mounts from /mnt/persist to home
   # This avoids the "empty directory" issue caused by mounting into a tmpfs
   systemd.tmpfiles.rules = [

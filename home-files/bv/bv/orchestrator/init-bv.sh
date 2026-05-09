@@ -33,10 +33,18 @@ tmux split-window -h -t "$SESSION:0.1"
 # +-------------------+-------------------+
 
 # Start the agents in their panes
-tmux send-keys -t "$SESSION:0.0" "cd ~/.bv-logic/builder && pi" Enter
-tmux send-keys -t "$SESSION:0.2" "cd ~/.bv-logic/verifier && pi" Enter
+# Builder starts in workspace, loads logic from .bv-logic/builder
+tmux send-keys -t "$SESSION:0.0" "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/builder && cd ~/workspace && pi" Enter
+
+# Verifier starts in workspace (read-only), loads logic from .bv-logic/verifier
+tmux send-keys -t "$SESSION:0.2" "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/verifier && cd ~/workspace && pi" Enter
+
+# Coordinator starts in its logic directory
 tmux send-keys -t "$SESSION:0.1" "cd ~/.bv-logic/orchestrator && clear" Enter
+
+# Log Watcher watches persistent data
 tmux send-keys -t "$SESSION:0.3" "tail -f ~/bv/sessions/*.jsonl 2>/dev/null" Enter
+
 
 echo "BV Layout initialized. Attach with: tmux attach -t $SESSION"
 echo "Then run the coordinator in the bottom-left pane (0.1)."
