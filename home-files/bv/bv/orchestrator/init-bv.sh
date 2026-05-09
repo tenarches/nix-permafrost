@@ -34,17 +34,23 @@ tmux split-window -h -t "$SESSION:0.1"
 
 # Start the agents in their panes
 # Builder starts in workspace, loads logic from .bv-logic/builder
+tmux select-pane -t "$SESSION:0.0" -T "BUILDER"
 tmux send-keys -t "$SESSION:0.0" "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/builder && cd ~/workspace && pi" Enter
 
 # Verifier starts in workspace (read-only), loads logic from .bv-logic/verifier
+tmux select-pane -t "$SESSION:0.2" -T "VERIFIER"
 tmux send-keys -t "$SESSION:0.2" "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/verifier && cd ~/workspace && pi" Enter
 
 # Coordinator starts in its logic directory
+tmux select-pane -t "$SESSION:0.1" -T "COORDINATOR"
 tmux send-keys -t "$SESSION:0.1" "cd ~/.bv-logic/orchestrator && clear" Enter
 
-# Log Watcher watches persistent data
-tmux send-keys -t "$SESSION:0.3" "tail -f ~/bv/sessions/*.jsonl 2>/dev/null" Enter
+# Log Watcher watches persistent data with persistent retry (-F)
+tmux select-pane -t "$SESSION:0.3" -T "SESSION LOG"
+tmux send-keys -t "$SESSION:0.3" "tail -F ~/bv/sessions/*.jsonl 2>/dev/null" Enter
 
+# Enable pane borders and titles globally for this session
+tmux set-option -t "$SESSION" pane-border-status top
+tmux set-option -t "$SESSION" pane-border-format " [ #T ] "
 
 echo "BV Layout initialized. Attach with: tmux attach -t $SESSION"
-echo "Then run the coordinator in the bottom-left pane (0.1)."

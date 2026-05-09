@@ -12,7 +12,9 @@ Agents are defined declaratively in `modules/inventory.nix`. Each spec declares 
 | **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini; minimal baseline for standalone tasks. |
 | **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration; `openclaude` compatibility. |
 | **`gemini`** | Google Specialist | `gemini-cli` | Standard interactive Gemini access. |
+| **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. |
 | **`antigravity`** | Web Browsing / GUI | Browser / GUI | Wayland passthrough; specialized for UI interaction. |
+| **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. |
 
 ## Launching an Agent
 
