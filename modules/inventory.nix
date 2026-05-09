@@ -132,7 +132,7 @@ let
       extraPackages = [
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
-        pkgs.nodejs_22
+        pkgs.nodejs_25
         pkgs.npm
         pkgs.tsx
       ]
