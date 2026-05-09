@@ -120,12 +120,8 @@ let
         }
         # Builder-verifier project tree: persistent state (sessions, node_modules)
         {
-          host = "bv/sessions";
-          guest = "bv/sessions";
-        }
-        {
-          host = "bv/node_modules";
-          guest = ".bv-logic/orchestrator/node_modules";
+          host = "bv";
+          guest = "bv";
         }
         # mcporter MCP server configuration
         {
