@@ -5,14 +5,15 @@
   # Mirrors the patterns of high-quality agent environments
 
   home-manager.users.agent = {
-    home.stateVersion = "25.11";
-
-    # MCP Servers and tools
-    home.packages = [
-      inputs.devenv.packages.${pkgs.system}.devenv
-      pkgs.uv
-      pkgs.nodejs
-    ];
+    home = {
+      stateVersion = "25.11";
+      sessionPath = [ "$HOME/.local/bin" ];
+      packages = [
+        inputs.devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv
+        pkgs.uv
+        pkgs.nodejs
+      ];
+    };
 
     programs.direnv = {
       enable = true;

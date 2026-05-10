@@ -41,7 +41,7 @@ let
             { lib, ... }:
             {
               nixpkgs = {
-                hostPlatform = system;
+                hostPlatform.system = system;
                 config.allowUnfree = true;
                 overlays = [
                   (import ./overlays/python-mcp.nix)
@@ -243,13 +243,18 @@ let
         ${pkgs.procps}/bin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
         EXT_IF=$(ip route | grep default | awk '{print $5}' | head -n1)
 
-        # Capture for use inside cleanup — EXT_IF may be empty if no default route exists
-        EXT_IF_AT_LAUNCH="$EXT_IF"
+        # Idempotent NAT — check-then-add so multiple VMs don't collide.
+        # Rules are never removed on cleanup so other VMs keep connectivity.
+        if [ -n "$EXT_IF" ]; then
+          ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
+            ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE
+          ${pkgs.iptables}/bin/iptables -C FORWARD -i "$BRIDGE" -j ACCEPT 2>/dev/null || \
+            ${pkgs.iptables}/bin/iptables -A FORWARD -i "$BRIDGE" -j ACCEPT
+          ${pkgs.iptables}/bin/iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            ${pkgs.iptables}/bin/iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+        fi
 
         cleanup() {
-          echo "Permafrost: cleaning up ${spec.name}..."
-          # Note: Host-side bridge and NAT are managed declaratively in modules/host.nix.
-          # We do not perform JIT cleanup here to avoid dropping connectivity for other VMs.
           echo "Permafrost: cleanup complete for ${spec.name}."
         }
 

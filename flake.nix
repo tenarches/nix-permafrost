@@ -120,7 +120,7 @@
                   inputs.mcp-servers-nix.overlays.default
                 ];
                 config.allowUnfree = true;
-                hostPlatform = "x86_64-linux";
+                hostPlatform.system = "x86_64-linux";
               };
               networking.hostName = "permafrost";
               system.stateVersion = "25.11";
