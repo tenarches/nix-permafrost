@@ -16,6 +16,8 @@ let
     config = {
       imports = [ ./agent-base.nix ];
 
+      nixpkgs.overlays = spec.overlays or [ ];
+
       microvm = {
         shares = [
           {

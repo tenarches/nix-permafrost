@@ -26,7 +26,6 @@
     # Devenv 2.0 for native development environments
     devenv = {
       url = "github:cachix/devenv";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     home-manager = {
@@ -88,7 +87,7 @@
           devShells.default = pkgs.mkShell {
             shellHook = config.pre-commit.installationScript;
             packages = [
-              pkgs.devenv
+              inputs.devenv.packages.${system}.devenv
               pkgs.sops
               pkgs.age
               pkgs.virtiofsd
@@ -115,8 +114,6 @@
             {
               nixpkgs = {
                 overlays = [
-                  # Centralized Devenv integration
-                  (import ./overlays/devenv.nix { inherit inputs; })
                   # Centralized Python MCP overrides
                   (import ./overlays/python-mcp.nix)
                   # MCP server packages — evaluated against patched pkgs

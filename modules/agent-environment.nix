@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ inputs, pkgs, ... }:
 
 {
   # Shared Agent Environment: Standardized tools and configurations
@@ -8,10 +8,10 @@
     home.stateVersion = "25.11";
 
     # MCP Servers and tools
-    home.packages = with pkgs; [
-      devenv
-      uv
-      nodejs
+    home.packages = [
+      inputs.devenv.packages.${pkgs.system}.devenv
+      pkgs.uv
+      pkgs.nodejs
     ];
 
     programs.direnv = {
