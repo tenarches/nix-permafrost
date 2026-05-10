@@ -76,7 +76,7 @@
     "/nix/.rw-store" = {
       device = "tmpfs";
       fsType = "tmpfs";
-      options = [ "size=2G" ];
+      options = [ "size=20G" ];
       neededForBoot = true;
     };
 
