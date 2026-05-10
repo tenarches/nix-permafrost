@@ -12,6 +12,8 @@ let
     pkgs.mcp-nixos
   ];
 
+  sharedFiles = ../home-files/shared;
+
   specs = {
     claude = {
       name = "claude";
@@ -103,6 +105,9 @@ let
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
       ]
       ++ mcpServers;
+      homeFiles = {
+        ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
+      };
     };
 
     bv = {
@@ -154,7 +159,7 @@ let
         in
         {
           ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
-          ".pi/agent/models.json".source = bvFiles + "/.pi/agent/models.json";
+          ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
           ".bv-logic/notify.json".source = bvFiles + "/bv/notify.json";
           ".bv-logic/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
           ".bv-logic/builder/.pi/extensions/bash-lockdown.ts".source =

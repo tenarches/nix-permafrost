@@ -161,6 +161,7 @@
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
     "d /home/agent/.local/share 0700 agent users - -"
+    "d /home/agent/.local/share/nvim 0700 agent users - -"
     "d /home/agent/.bv-logic 0700 agent users - -"
   ];
 
