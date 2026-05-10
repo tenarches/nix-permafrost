@@ -2,6 +2,7 @@
   inputs,
   pkgs,
   lib,
+  config,
   ...
 }:
 
@@ -15,8 +16,8 @@
   microvm = {
     hypervisor = lib.mkDefault "cloud-hypervisor";
     vsock.cid = lib.mkDefault 10;
-    vcpu = lib.mkDefault 2;
-    mem = lib.mkDefault 2047; # Avoid 2048MB hang in certain hypervisors (e.g. cloud-hypervisor)
+    vcpu = lib.mkDefault 4;
+    mem = lib.mkDefault 8194; # Avoid 4096MB hang in certain hypervisors (e.g. cloud-hypervisor)
 
     # The Nix store from the host is shared read-only into the guest.
     shares = [
@@ -31,6 +32,39 @@
     # Ephemeral state via microvm.writableStoreOverlay
     # This gives the guest a writable overlay atop the host's read-only Nix store share.
     writableStoreOverlay = "/nix/.rw-store";
+
+    # Holistic Credential Injection for Cloud-Hypervisor
+    # Since cloud-hypervisor does not support SMBIOS-based credential injection (standard in microvm.nix),
+    # we use the --platform oem_string mechanism to pass secrets. This script reads the
+    # host-side credential files and formats them into a single --platform flag.
+    extraArgsScript =
+      let
+        cfg = config.microvm;
+        isCLH = cfg.hypervisor == "cloud-hypervisor";
+        hasCreds = cfg.credentialFiles != { };
+      in
+      lib.mkIf (isCLH && hasCreds) (
+        let
+          credEntries = lib.mapAttrsToList (name: path: { inherit name path; }) cfg.credentialFiles;
+
+          readCredsScript = lib.concatMapStrings (
+            { name, path }:
+            ''
+              if [ ! -r "${path}" ]; then
+                echo "agent-base: cannot read '${path}' for credential '${name}'" >&2
+                exit 1
+              fi
+              _val=$(cat "${path}")
+              _oem_parts="''${_oem_parts:+''${_oem_parts},}io.systemd.credential:${name}=''${_val}"
+            ''
+          ) credEntries;
+        in
+        ''
+          _oem_parts=""
+          ${readCredsScript}
+          printf -- '--platform oem_string=[%s]' "$_oem_parts"
+        ''
+      );
   };
 
   fileSystems = {
@@ -72,10 +106,24 @@
     ];
   };
 
-  nix.settings.experimental-features = [
-    "nix-command"
-    "flakes"
-  ];
+  nix.settings = {
+    experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
+    trusted-users = [
+      "root"
+      "agent"
+    ];
+    substituters = [
+      "https://cache.nixos.org/"
+      "https://devenv.cachix.org"
+    ];
+    trusted-public-keys = [
+      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+      "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw="
+    ];
+  };
 
   # Agent user configuration
   users.mutableUsers = false;
@@ -96,6 +144,14 @@
   # Enable passwordless sudo for the wheel group
   security.sudo.wheelNeedsPassword = false;
 
+  programs.tmux = {
+    enable = true;
+    extraConfig = ''
+      set -g extended-keys on
+      set -g extended-keys-format csi-u
+    '';
+  };
+
   # Automatically symlink persistent mounts from /mnt/persist to home
   # This avoids the "empty directory" issue caused by mounting into a tmpfs
   systemd.tmpfiles.rules = [
@@ -105,6 +161,8 @@
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
     "d /home/agent/.local/share 0700 agent users - -"
+    "d /home/agent/.local/share/nvim 0700 agent users - -"
+    "d /home/agent/.bv-logic 0700 agent users - -"
   ];
 
   # Essential packages for agent operation, terminal persistence, and GUI support
@@ -117,6 +175,7 @@
     gzip
     xz
     tmux
+    jq
     # GUI Support libraries (Mesa/GL)
     mesa
     libGL

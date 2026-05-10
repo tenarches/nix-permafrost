@@ -41,8 +41,13 @@ let
             { lib, ... }:
             {
               nixpkgs = {
-                hostPlatform = system;
+                hostPlatform.system = system;
                 config.allowUnfree = true;
+                overlays = [
+                  (import ./overlays/python-mcp.nix)
+                  inputs.mcp-servers-nix.overlays.default
+                ]
+                ++ (spec.overlays or [ ]);
               };
               microvm = {
                 vsock.cid = spec.vsockCid;
@@ -74,11 +79,12 @@ let
                   ++ (map (s: {
                     source = "host-managed-virtiofsd-at-${s.host}";
                     mountPoint = "/mnt/persist/${s.guest}";
-                    tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+                    # Hash the guest path to stay within the 36-char virtiofs tag limit
+                    tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
                     proto = "virtiofs";
                     socket =
-                      "/run/microvm-${spec.name}/persist_"
-                      + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest)
+                      "/run/microvm-${spec.name}/p_"
+                      + (builtins.substring 0 30 (builtins.hashString "md5" s.guest))
                       + ".sock";
                   }) allShares)
                   ++ (lib.optionals (spec.gui or false) [
@@ -93,13 +99,15 @@ let
                 );
               };
 
-              environment.variables = lib.optionalAttrs (spec.gui or false) {
-                WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
-                XDG_RUNTIME_DIR = "/run/user/1000";
-                NIXOS_OZONE_WL = "1";
-                LIBGL_ALWAYS_SOFTWARE = "1";
-                WLR_RENDERER_ALLOW_SOFTWARE = "1";
-              };
+              environment.variables =
+                (lib.optionalAttrs (spec.gui or false) {
+                  WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
+                  XDG_RUNTIME_DIR = "/run/user/1000";
+                  NIXOS_OZONE_WL = "1";
+                  LIBGL_ALWAYS_SOFTWARE = "1";
+                  WLR_RENDERER_ALLOW_SOFTWARE = "1";
+                })
+                // (spec.env or { });
 
               # Match any virtio network interface
               systemd.network.networks."10-lan" = {
@@ -118,11 +126,14 @@ let
 
               environment.systemPackages = spec.extraPackages;
 
+              home-manager.users.agent.home.file = spec.homeFiles or { };
+
               # Dynamically map persistent shares into /home/agent
               systemd.tmpfiles.rules =
                 (map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (
                   spec.persistentShares or [ ]
                 ))
+                ++ (map (s: "d /mnt/persist/${s.guest} 0700 agent users - -") (spec.persistentShares or [ ]))
                 ++ (lib.concatMap (
                   s:
                   lib.optional (
@@ -232,40 +243,8 @@ let
         ${pkgs.procps}/bin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
         EXT_IF=$(ip route | grep default | awk '{print $5}' | head -n1)
 
-        # Capture for use inside cleanup — EXT_IF may be empty if no default route exists
-        EXT_IF_AT_LAUNCH="$EXT_IF"
-
-        cleanup() {
-          echo "Permafrost: cleaning up ${spec.name}..."
-
-          if [ -n "$EXT_IF_AT_LAUNCH" ]; then
-            ${pkgs.iptables}/bin/iptables -t nat -D POSTROUTING \
-              -s 192.168.33.0/24 -o "$EXT_IF_AT_LAUNCH" -j MASQUERADE 2>/dev/null || true
-            ${pkgs.iptables}/bin/iptables -D FORWARD \
-              -i "$BRIDGE" -j ACCEPT 2>/dev/null || true
-            ${pkgs.iptables}/bin/iptables -D FORWARD \
-              -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-          fi
-
-          # Remove bridge only if no tap interfaces remain attached
-          if ip link show "$BRIDGE" >/dev/null 2>&1; then
-            ATTACHED=$(ls /sys/class/net/"$BRIDGE"/brif 2>/dev/null | wc -l)
-            if [ "$ATTACHED" -eq 0 ]; then
-              ip link set "$BRIDGE" down 2>/dev/null || true
-              ip link del "$BRIDGE" 2>/dev/null || true
-              echo "Permafrost: bridge $BRIDGE removed."
-            else
-              echo "Permafrost: bridge $BRIDGE still has $ATTACHED attached interface(s); leaving in place."
-            fi
-          fi
-
-          echo "Permafrost: cleanup complete for ${spec.name}."
-        }
-
-        if [ "$COMMAND" = "run" ]; then
-          trap cleanup EXIT INT TERM
-        fi
-
+        # Idempotent NAT — check-then-add so multiple VMs don't collide.
+        # Rules are never removed on cleanup so other VMs keep connectivity.
         if [ -n "$EXT_IF" ]; then
           ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
             ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE
@@ -273,6 +252,14 @@ let
             ${pkgs.iptables}/bin/iptables -A FORWARD -i "$BRIDGE" -j ACCEPT
           ${pkgs.iptables}/bin/iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
             ${pkgs.iptables}/bin/iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+        fi
+
+        cleanup() {
+          echo "Permafrost: cleanup complete for ${spec.name}."
+        }
+
+        if [ "$COMMAND" = "run" ]; then
+          trap cleanup EXIT INT TERM
         fi
 
         # Background TAP attachment
@@ -303,7 +290,7 @@ let
           ${lib.concatMapStringsSep "\n" (
             s:
             let
-              tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+              tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
             in
             ''
               ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -319,7 +306,7 @@ let
           ${lib.concatMapStringsSep "\n" (
             s:
             let
-              tag = "persist_" + (lib.replaceStrings [ "." "/" ] [ "_" "_" ] s.guest);
+              tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
             in
             ''while [ ! -S "$SOCKET_DIR/${tag}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
           ) allShares}
@@ -373,6 +360,7 @@ in
   gemini = mkRunner vms.gemini;
   opencode = mkRunner vms.opencode;
   pi = mkRunner vms.pi;
+  bv = mkRunner vms.bv;
   antigravity = mkRunner vms.antigravity;
   crush = mkRunner vms.crush;
   default = mkRunner vms.claude;
