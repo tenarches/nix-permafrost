@@ -1,0 +1,12 @@
+{
+  "name": "bv-orchestrator",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --preserve-symlinks --import tsx orchestrator.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "tsx": "^4.19.2"
+  }
+}

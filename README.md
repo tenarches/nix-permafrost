@@ -2,10 +2,14 @@
 
 Permafrost is a declarative, hardware-isolated sandbox framework for executing LLM agents on NixOS. By utilizing **cloud-hypervisor** via `microvm.nix`, Permafrost enforces a rigorous KVM security boundary, ensuring that autonomous agents—which may execute arbitrary code or shell commands—remain strictly confined.
 
+### Autonomous Workflows: Builder-Verifier (BV)
+
+Beyond simple sandboxing, Permafrost implements the **Builder-Verifier** architecture—a dual-agent system where a creative Builder agent (Gemini) implements code while a specialized Verifier agent (Qwen) audits the session log to validate atomic claims before any human review.
+
 ```mermaid
 graph TB
     subgraph HOST["NixOS Host (permafrost)"]
-        direction TB
+...
         NS["/nix/store"]
         SOPS["sops-nix<br/>Secrets Engine"]
         BR["microbr bridge<br/>192.168.33.1/24"]

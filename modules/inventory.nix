@@ -1,8 +1,4 @@
-{
-  inputs,
-  pkgs,
-  ...
-}:
+{ inputs, pkgs, ... }:
 
 let
   inherit (pkgs) lib;
@@ -15,6 +11,8 @@ let
     pkgs.terraform-mcp-server
     pkgs.mcp-nixos
   ];
+
+  sharedFiles = ../home-files/shared;
 
   specs = {
     claude = {
@@ -102,7 +100,93 @@ let
           guest = ".pi";
         }
       ];
-      extraPackages = [ inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi ];
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
+      ]
+      ++ mcpServers;
+      homeFiles = {
+        ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
+      };
+    };
+
+    bv = {
+      name = "bv";
+      tapId = "bv";
+      ip = "192.168.33.16";
+      mac = "02:00:00:00:00:16";
+      vsockCid = 16;
+      workspacePath = "/run/agent-workspaces/bv";
+      persistentShares = [
+        # Pi auth — Gemini OAuth tokens (written by `pi /login`)
+        {
+          host = ".pi";
+          guest = ".pi";
+        }
+        # Builder-verifier project tree: persistent state (sessions, node_modules)
+        {
+          host = "bv";
+          guest = "bv";
+        }
+        # mcporter MCP server configuration
+        {
+          host = ".mcporter";
+          guest = ".mcporter";
+        }
+      ];
+      overlays = [
+        (_final: prev: {
+          nodejs = prev.nodejs_25;
+        })
+      ];
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
+        pkgs.nodejs
+      ]
+      ++ mcpServers;
+      credentials = {
+        GITHUB_TOKEN = "/run/secrets/github-token";
+      };
+      env = {
+        LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
+        PI_CODING_AGENT_SESSION_DIR = "/home/agent/bv/sessions";
+      };
+
+      homeFiles =
+        let
+          bvFiles = ../home-files/bv;
+        in
+        {
+          ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
+          ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".bv-logic/notify.json".source = bvFiles + "/bv/notify.json";
+          ".bv-logic/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
+          ".bv-logic/builder/.pi/extensions/bash-lockdown.ts".source =
+            bvFiles + "/bv/builder/.pi/extensions/bash-lockdown.ts";
+          ".bv-logic/builder/.pi/skills/prime.md".source = bvFiles + "/bv/builder/.pi/skills/prime.md";
+          ".bv-logic/builder/.pi/skills/mcporter.md".source = bvFiles + "/bv/builder/.pi/skills/mcporter.md";
+          ".bv-logic/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
+          ".bv-logic/verifier/.pi/extensions/verifier-provider.ts".source =
+            bvFiles + "/bv/verifier/.pi/extensions/verifier-provider.ts";
+          ".bv-logic/verifier/.pi/extensions/readonly-enforcer.ts".source =
+            bvFiles + "/bv/verifier/.pi/extensions/readonly-enforcer.ts";
+          ".bv-logic/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
+          ".bv-logic/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
+          ".bv-logic/orchestrator/coordinator.sh" = {
+            source = bvFiles + "/bv/orchestrator/coordinator.sh";
+            executable = true;
+          };
+          ".bv-logic/orchestrator/init-bv.sh" = {
+            source = bvFiles + "/bv/orchestrator/init-bv.sh";
+            executable = true;
+          };
+          ".bv-logic/orchestrator/orchestrator.ts".source = bvFiles + "/bv/orchestrator/orchestrator.ts";
+          ".bv-logic/orchestrator/notify.ts".source = bvFiles + "/bv/orchestrator/notify.ts";
+          ".bv-logic/orchestrator/notify-config.ts".source = bvFiles + "/bv/orchestrator/notify-config.ts";
+          ".bv-logic/orchestrator/command-listener.ts".source =
+            bvFiles + "/bv/orchestrator/command-listener.ts";
+        };
     };
 
     antigravity = {
@@ -139,9 +223,7 @@ let
           guest = ".local/share/crush";
         }
       ];
-      extraPackages = [
-        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush
-      ];
+      extraPackages = [ inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush ];
     };
   };
 
@@ -150,7 +232,6 @@ let
   allCids = map (s: s.vsockCid) allSpecs;
 
 in
-
 assert lib.assertMsg (builtins.all (id: builtins.stringLength id <= 7) allTapIds)
   "inventory: one or more tapId values exceed 7 characters (max for IFNAMSIZ with 'microvm-' prefix)";
 

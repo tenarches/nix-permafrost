@@ -2,112 +2,118 @@
 
 Permafrost is designed for high-capability, declarative agent execution. Because we enforce a strict KVM boundary using `cloud-hypervisor` and rely on high-performance `virtiofs` and `tap` networking, executing a sandbox requires root privileges to configure the host-side network interfaces.
 
-## Launching an Agent (Local vs. Remote)
+## Agent Inventory
 
-Whether you are a local developer or executing an agent Just-In-Time (JIT) from a remote repository, the workflow is identical:
+Agents are defined declaratively in `modules/inventory.nix`. Each spec declares its network identity, CLI tools, MCP servers, and persistent filesystem mapping.
 
-**JIT (Remote):**
-```bash
-sudo nix run github:tenarches/nix-permafrost#<agent-name>
-```
+| Agent | Purpose | Primary Tool | Key Features |
+| :--- | :--- | :--- | :--- |
+| **`bv`** | **Builder-Verifier Harness** | Node.js Orchestrator | Dual-agent workflow, MCP bridge, automated verification loop. |
+| **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini; minimal baseline for standalone tasks. |
+| **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration; `openclaude` compatibility. |
+| **`gemini`** | Google Specialist | `gemini-cli` | Standard interactive Gemini access. |
+| **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. |
+| **`antigravity`** | Web Browsing / GUI | Browser / GUI | Wayland passthrough; specialized for UI interaction. |
+| **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. |
+
+## Launching an Agent
 
 **Local Checkout:**
 ```bash
 sudo nix run .#<agent-name>
 ```
 
-Running without specifying an agent name (`sudo nix run .#`) launches the default agent.
-
-To list all available agents:
+**Remote JIT:**
 ```bash
-nix flake show
+sudo nix run github:tenarches/nix-permafrost#<agent-name>
 ```
 
-Agents are defined declaratively in `modules/inventory.nix`. Each spec declares the agent's network identity, CLI tools, MCP servers, credentials, and persistent shares. Adding a new agent means adding a new entry to the inventory and a corresponding runner in `runners.nix`.
+**Terminating the sandbox:** Press `Ctrl-a` then `x`.
 
-## Console and Terminal
+## Filesystem and Persistence
 
-The VM console attaches directly to your active terminal with an automatic login as the `agent` user. This is the primary and most secure method of interaction.
+Permafrost uses a hybrid filesystem model to balance security and usability.
 
-**Terminating the sandbox:** Press `Ctrl-a` then `x`. This kills the hypervisor and destroys all ephemeral state. The `systemd-run` transient unit automatically cleans up all sockets, PIDs, and temporary mounts.
+### 1. Home Files (Declarative)
+Files defined in the `homeFiles` attribute of a spec (found in `modules/inventory.nix`) are managed by Home-Manager. These are symlinked from the read-only Nix store into your guest home directory at launch.
+- **Example:** The `bv` orchestrator source is symlinked to `~/bv/orchestrator/`.
+- **Note:** These files are **read-only**. To modify them, you must update the files in `home-files/` on the host and restart the VM.
 
-### TMUX
+### 2. Persistent Shares (Mutable)
+Directories declared in `persistentShares` map host paths into the guest. These survive VM termination.
+- **`~/workspace`**: Shared working directory across all agents.
+- **`~/.agents`**: Shared state (memories, persistent context).
+- **`~/bv`** (in `bv` VM): Houses session logs and mutable orchestrator state.
 
-Every sandbox ships with `tmux` pre-configured. Because LLM agents often run long, autonomous loops, executing your workflow inside a `tmux` session ensures that an accidental terminal disconnect does not terminate the task.
+## Builder-Verifier (BV) Workflow
 
-The tmux prefix is `Ctrl-a` (same as the hypervisor escape). To send a literal `Ctrl-a` to tmux when inside the VM, press `Ctrl-a` twice (`Ctrl-a Ctrl-a`). To terminate the VM from within tmux, detach first (`Ctrl-a d`), then press `Ctrl-a x` at the bare console.
+The `bv` agent is the project's flagship "Agentic Harness." It implements an autonomous dual-agent architecture (Gemini Builder + Qwen Verifier).
 
-## Lifecycle Management
+### Initial Setup
+Inside the `bv` VM, you must perform a one-time setup for the orchestrator dependencies and authentication:
+1.  **Install dependencies:**
+    ```bash
+    cd ~/.bv-logic/orchestrator
+    npm install
+    ```
+2.  **Authenticate with Google (Gemini):**
+    ```bash
+    pi /login
+    ```
+    *Follow the OAuth flow to link your Google subscription. This token is shared between the Builder and Verifier.*
 
-Sandboxes can be run in the foreground (interactive) or in the background (detached). The runner script supports several subcommands:
+### Mode 1: Interactive (TMUX)
+Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.
 
-- **`run` (default)**: Launches the VM in the foreground with an interactive serial console attached to your terminal. This is the standard "JIT" mode.
-- **`start`**: Launches the VM in the background as a detached `systemd` service. This is ideal for long-running agents or servers.
-- **`stop`**: Gracefully terminates the sandbox and cleans up all host-side resources (network bridges, sockets, mounts).
-- **`status`**: Reports the current execution state, including the guest IP address and VSOCK CID.
+1.  **Initialize Layout:**
+    ```bash
+    cd ~/.bv-logic/orchestrator
+    ./init-bv.sh
+    ```
+    This creates a tmux session named `bv` with the following layout:
+    - **Top-Left (0.0):** Builder Agent (`pi`)
+    - **Top-Right (0.2):** Verifier Agent (`pi`)
+    - **Bottom-Left (0.1):** Coordinator Script
+    - **Bottom-Right (0.3):** Live Session Log Watcher
 
-**Example:**
+2.  **Attach to Session:**
+    ```bash
+    tmux attach -t bv
+    ```
+
+3.  **Run a Task:**
+    In the **bottom-left pane (0.1)**, run:
+    ```bash
+    ./coordinator.sh path/to/task.md
+    ```
+    The coordinator will:
+    - Paste the task into the Builder's prompt (top-left).
+    - Wait for the Builder to finish (watching the filesystem for JSONL updates).
+    - Paste the audit prompt into the Verifier (top-right).
+    - Display progress in the Log Watcher (bottom-right).
+
+*Tip: If the coordinator hangs at "Waiting for session...", ensure the Builder has actually started and is receiving input.*
+
+### Mode 2: Headless (Orchestrator)
+Best for automated implementation and verification.
 ```bash
-# Start an agent in the background
-sudo nix run .#claude -- start
-
-# Check its IP
-sudo nix run .#claude -- status
-
-# Stop it when finished
-sudo nix run .#claude -- stop
+cd ~/.bv-logic/orchestrator
+npm start -- --task "Implement a JWT authentication service"
 ```
 
-## Persistence
+The orchestrator executes a five-stage loop:
+1.  **Prime:** Loads codebase context via the `prime` skill.
+2.  **Build:** Builder implements the code and provides verifiable atomic claims.
+3.  **Lint:** Runs `tsc` and `eslint` automatically.
+4.  **Verify:** Verifier audits the session log against the claims.
+5.  **Feedback:** Automatically retries up to 2 times on failure.
 
-### What Persists (survives VM termination)
+## External Tools (MCP)
 
-Every agent gets two **global** shared directories mounted from the host via `virtiofs`:
-
-- `~/workspace` — shared working directory across all agents
-- `~/.agents` — shared agent coordination/state
-
-Each agent spec can also declare **per-agent persistent shares** via the `persistentShares` field in `inventory.nix`. These map host directories under `$HOME` into the guest at `~/`, preserving agent-specific configuration between sessions. The launching user's home directory is detected via `$SUDO_USER`.
-
-### What Is Ephemeral (destroyed on exit)
-
-- **`/home/agent`**: Mounted on `tmpfs`. All dotfiles and local state not covered by persistent shares are lost.
-- **`/nix/.rw-store`**: A tmpfs overlay atop the read-only host Nix store. Any `nix-build` or `nix-env` operations inside the guest are temporary.
-
-## Credentials
-
-API keys declared in an agent's `credentials` field are injected automatically at VM launch. The host decrypts them via `sops-nix` and passes them into the guest as OEM strings — they never touch the Nix store or the guest disk. See the [Secret Injection Pipeline](../README.md#secret-injection-pipeline) diagram for the full flow.
-
-## SSH Access
-
-Every sandbox is pre-configured with OpenSSH. Authentication is strictly key-based and uses a **Shared Directory** pattern (via `virtiofs`) to inject your host's keys at runtime. This ensures that changing your SSH keys never triggers a Nix rebuild of the VM.
-
-### Key Injection
-
-At launch, the runner automatically collects public keys from:
-1. Your active **`ssh-agent`** (via `ssh-add -L`).
-2. The **`AGENT_PUBKEYS`** environment variable.
-
-The runner creates an ephemeral `ssh-keys` directory on the host, populates it with these keys for both the `agent` and `root` users, and shares it with the guest. The guest is configured to trust these keys for authentication.
-
-**Note:** If you run the sandbox via `sudo`, the runner will attempt to auto-detect your user's SSH agent socket in `/run/user/$(id -u $SUDO_USER)`.
-
-### Recommended SSH Config
-
-Add the following to your `~/.ssh/config` for easy access:
-
-```ssh
-Host permafrost-*
-    User agent
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-
-# Example for TCP connection (requires 'status' to get IP)
-Host permafrost-claude
-    HostName 192.168.33.10
-```
-
-## GUI and Wayland Passthrough
+The `bv` and `pi` agents have access to the **Model Context Protocol (MCP)** via the `mcporter` bridge.
+- **Discover tools:** `npx mcporter list`
+- **Call a tool:** `npx mcporter call <server>.<tool> key:value`
+- **Config:** Managed declaratively in `~/.mcporter/mcporter.json`.
 
 Agents with `gui = true` in their inventory spec get the host's Wayland socket mounted into the guest via `virtiofs`. The runner auto-detects the active Wayland socket on the host (defaulting to `wayland-0`, probing if necessary).
 

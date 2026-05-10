@@ -16,6 +16,8 @@ let
     config = {
       imports = [ ./agent-base.nix ];
 
+      nixpkgs.overlays = spec.overlays or [ ];
+
       microvm = {
         shares = [
           {
@@ -32,7 +34,14 @@ let
             tag = "wayland";
             proto = "virtiofs";
           }
-        ]);
+        ])
+        ++ (map (s: {
+          source = "/mnt/persist/${s.guest}";
+          mountPoint = "/mnt/persist/${s.guest}";
+          # Hash the guest path to stay within the 36-char virtiofs tag limit
+          tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
+          proto = "virtiofs";
+        }) (spec.persistentShares or [ ]));
 
         vsock.cid = spec.vsockCid;
         interfaces = [
@@ -44,13 +53,15 @@ let
         ];
       };
 
-      environment.variables = lib.optionalAttrs (spec.gui or false) {
-        WAYLAND_DISPLAY = "wayland-0";
-        XDG_RUNTIME_DIR = "/run/user/1000";
-        NIXOS_OZONE_WL = "1";
-        LIBGL_ALWAYS_SOFTWARE = "1";
-        WLR_RENDERER_ALLOW_SOFTWARE = "1";
-      };
+      environment.variables =
+        (lib.optionalAttrs (spec.gui or false) {
+          WAYLAND_DISPLAY = "wayland-0";
+          XDG_RUNTIME_DIR = "/run/user/1000";
+          NIXOS_OZONE_WL = "1";
+          LIBGL_ALWAYS_SOFTWARE = "1";
+          WLR_RENDERER_ALLOW_SOFTWARE = "1";
+        })
+        // (spec.env or { });
 
       # microvm.credentialFiles = spec.credentials or {};
 
@@ -71,11 +82,14 @@ let
       networking.useNetworkd = true;
       environment.systemPackages = spec.extraPackages;
 
+      home-manager.users.agent.home.file = spec.homeFiles or { };
+
       # Dynamically map persistent shares into /home/agent
       systemd.tmpfiles.rules =
         (map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") (
           spec.persistentShares or [ ]
         ))
+        ++ (map (s: "d /mnt/persist/${s.guest} 0700 agent users - -") (spec.persistentShares or [ ]))
         ++ (lib.concatMap (
           s:
           lib.optional (

@@ -26,7 +26,6 @@
     # Devenv 2.0 for native development environments
     devenv = {
       url = "github:cachix/devenv";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     home-manager = {
@@ -88,6 +87,7 @@
           devShells.default = pkgs.mkShell {
             shellHook = config.pre-commit.installationScript;
             packages = [
+              inputs.devenv.packages.${system}.devenv
               pkgs.sops
               pkgs.age
               pkgs.virtiofsd
@@ -120,7 +120,7 @@
                   inputs.mcp-servers-nix.overlays.default
                 ];
                 config.allowUnfree = true;
-                hostPlatform = "x86_64-linux";
+                hostPlatform.system = "x86_64-linux";
               };
               networking.hostName = "permafrost";
               system.stateVersion = "25.11";

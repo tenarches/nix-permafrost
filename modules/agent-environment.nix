@@ -1,17 +1,24 @@
-{ pkgs, ... }:
+{ inputs, pkgs, ... }:
 
 {
   # Shared Agent Environment: Standardized tools and configurations
   # Mirrors the patterns of high-quality agent environments
 
   home-manager.users.agent = {
-    home.stateVersion = "25.11";
+    home = {
+      stateVersion = "25.11";
+      sessionPath = [ "$HOME/.local/bin" ];
+      packages = [
+        inputs.devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv
+        pkgs.uv
+        pkgs.nodejs
+      ];
+    };
 
-    # MCP Servers and tools
-    home.packages = with pkgs; [
-      uv
-      nodejs_24
-    ];
+    programs.direnv = {
+      enable = true;
+      nix-direnv.enable = true;
+    };
 
     programs.tmux = {
       enable = true;
