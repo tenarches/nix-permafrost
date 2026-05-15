@@ -66,6 +66,10 @@ interface VerifierReport {
   };
 }
 
+interface TextCollector {
+  text: string;
+}
+
 // ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 export class Orchestrator {
@@ -134,7 +138,8 @@ export class Orchestrator {
     await this.builderSession.prompt("/skill:prime");
   }
 
-  private attachObserver(session: any, label: string): void {
+  private attachObserver(session: any, label: string): TextCollector {
+    const collector: TextCollector = { text: "" };
     const onEvent = (event: any) => {
       if (!event) return;
       switch (event.type) {
@@ -142,6 +147,7 @@ export class Orchestrator {
           const ae = event.assistantMessageEvent;
           if (!ae) return;
           if (ae.type === "text_delta") {
+            collector.text += ae.delta;
             process.stderr.write(`[${label}] ${ae.delta}`);
           } else if (ae.type === "thinking_delta") {
             process.stderr.write(`[${label}:think] ${ae.delta}`);
@@ -164,6 +170,7 @@ export class Orchestrator {
     } else if (session.events && typeof session.events.on === "function") {
       session.events.on("data", onEvent);
     }
+    return collector;
   }
 
   private async build(feedbackPrompt?: string): Promise<void> {
@@ -336,7 +343,7 @@ export class Orchestrator {
       settingsDir: VERIFIER_CWD,
     });
 
-    this.attachObserver(session, "VERIFY");
+    const collector = this.attachObserver(session, "VERIFY");
 
     const prompt = [
       "BUILDER SESSION LOG (JSONL):",
@@ -349,7 +356,7 @@ export class Orchestrator {
     ].join("\n");
 
     await session.prompt(prompt);
-    const raw = session.getLastAssistantText() ?? "";
+    const raw = collector.text;
     return this.parseReport(raw);
   }
 
