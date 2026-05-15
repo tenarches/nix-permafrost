@@ -70,6 +70,58 @@ interface TextCollector {
   text: string;
 }
 
+function truncateSession(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+
+  const lines = content.split("\n").filter((l) => l.trim());
+  const priority: string[] = [];
+  const rest: string[] = [];
+
+  for (const line of lines) {
+    let isPriority = false;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "bashExecution") isPriority = true;
+      if (entry.type === "tool_result" && (entry.name === "write" || entry.name === "edit")) isPriority = true;
+    } catch {
+      // non-JSON line, treat as non-priority
+    }
+    if (isPriority) {
+      priority.push(line);
+    } else {
+      rest.push(line);
+    }
+  }
+
+  // Last entry is always kept (completion summary)
+  const lastEntry = lines[lines.length - 1];
+  const hasLastInPriority = priority.length > 0 && priority[priority.length - 1] === lastEntry;
+  if (!hasLastInPriority && lastEntry) {
+    priority.push(lastEntry);
+    const lastIdx = rest.lastIndexOf(lastEntry);
+    if (lastIdx !== -1) rest.splice(lastIdx, 1);
+  }
+
+  let budget = maxChars;
+  const kept: string[] = [];
+
+  // Priority entries first
+  for (const line of priority) {
+    if (budget - line.length - 1 < 0) break;
+    kept.push(line);
+    budget -= line.length + 1;
+  }
+
+  // Fill remaining budget with non-priority entries, newest first
+  for (let i = rest.length - 1; i >= 0; i--) {
+    if (budget - rest[i].length - 1 < 0) break;
+    kept.unshift(rest[i]);
+    budget -= rest[i].length + 1;
+  }
+
+  return kept.join("\n");
+}
+
 // ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 export class Orchestrator {
@@ -245,8 +297,10 @@ export class Orchestrator {
       sessionContent.length >= TIER2_CHAR_THRESHOLD
         ? VERIFIER_MODEL_128K
         : VERIFIER_MODEL_64K;
+    const maxChars = verifierModel === VERIFIER_MODEL_128K ? 496_000 : 240_000;
+    const truncated = truncateSession(sessionContent, maxChars);
 
-    const report = await this.runVerifier(sessionContent, verifierModel);
+    const report = await this.runVerifier(truncated, verifierModel);
     this.lastReport = report;
 
     if (report.status === "PASSED") {
