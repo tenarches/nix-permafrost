@@ -88,17 +88,13 @@ while true; do
     break
   done
 
-  # Fire verifier with session content
+  # Fire verifier — write session to file to avoid tmux newline injection
   echo "[coordinator] Firing verifier (attempt $((retry + 1))/$((MAX_RETRIES + 1)))..."
-  session_content=$(cat "$latest")
-  verifier_prompt="BUILDER SESSION LOG (JSONL):
-$session_content
----
-VERIFICATION TASK:
-Original task: $task
+  session_file="/tmp/bv-verifier-session.jsonl"
+  cp "$latest" "$session_file"
 
-Audit the session log. Return only the JSON report."
-
+  task_oneline=$(echo "$task" | tr '\n' ' ')
+  verifier_prompt="Read the file $session_file — it contains the builder's JSONL session log. Then audit it against this task: $task_oneline — Return only the JSON report as specified in your instructions."
   tmux send-keys -t "$VERIFIER_PANE" "$verifier_prompt" Enter
 
   # Wait for verifier to finish
@@ -130,14 +126,22 @@ Audit the session log. Return only the JSON report."
   fi
 
   # Extract feedback and send back to builder
-  feedback=$(echo "$report_json" | jq -r '.report.feedback_for_builder // "Verification failed. Review and fix."')
-  echo "[coordinator] Sending feedback to builder (retry $((retry + 1)))..."
-
+  feedback=$(echo "$report_json" | jq -r '.report.feedback_for_builder // "Verification failed. Review and fix."' | tr '\n' ' ')
   retry=$((retry + 1))
-  tmux send-keys -t "$BUILDER_PANE" "VERIFIER FEEDBACK (attempt $retry/$MAX_RETRIES):
+  echo "[coordinator] Sending feedback to builder (retry $retry/$MAX_RETRIES)..."
 
-$feedback
+  # Record baseline size before sending feedback to avoid race condition
+  baseline_size=$(stat -c%s "$latest")
 
-Address all feedback. Provide an updated COMPLETION SUMMARY." Enter
+  tmux send-keys -t "$BUILDER_PANE" "VERIFIER FEEDBACK (attempt $retry/$MAX_RETRIES): $feedback — Address all feedback. Provide an updated COMPLETION SUMMARY." Enter
+
+  # Wait for builder to start processing (file must grow past baseline)
+  echo "[coordinator] Waiting for builder to begin processing feedback..."
+  while true; do
+    sleep 5
+    current_size=$(stat -c%s "$latest" 2>/dev/null || echo "$baseline_size")
+    [[ "$current_size" -gt "$baseline_size" ]] && break
+    echo "[coordinator] Builder not started yet..."
+  done
 
 done
