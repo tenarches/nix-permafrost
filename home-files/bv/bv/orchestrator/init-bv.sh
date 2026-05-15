@@ -18,6 +18,7 @@ tmux set-option -t "$SESSION" pane-border-status top
 tmux set-option -t "$SESSION" pane-border-format " #[fg=black,bg=cyan,bold] #T #[default] "
 tmux set-option -t "$SESSION" pane-active-border-style fg=cyan
 tmux set-option -t "$SESSION" pane-border-style fg=white
+tmux set-option -t "$SESSION" history-limit 50000
 
 # 1. Split vertically (Top/Bottom)
 # 0.0 (Top), 0.1 (Bottom)
