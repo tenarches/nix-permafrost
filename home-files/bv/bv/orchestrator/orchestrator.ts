@@ -108,12 +108,14 @@ function truncateSession(content: string, maxChars: number): string {
     if (rIdx !== -1) rest.splice(rIdx, 1);
   }
 
-  // Priority entries next
+  // Priority entries next (collected forward, then prepended to preserve order)
+  const priorityKept: string[] = [];
   for (const line of priority) {
     if (budget - line.length - 1 < 0) break;
-    kept.unshift(line);
+    priorityKept.push(line);
     budget -= line.length + 1;
   }
+  kept.unshift(...priorityKept);
 
   // Fill remaining budget with non-priority entries, newest first
   const filling: string[] = [];

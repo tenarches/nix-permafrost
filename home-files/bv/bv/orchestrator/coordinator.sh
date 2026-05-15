@@ -88,14 +88,22 @@ while true; do
     break
   done
 
-  # Fire verifier — write session to file to avoid tmux newline injection
+  # Fire verifier — use bracketed paste to send multi-line content safely
   echo "[coordinator] Firing verifier (attempt $((retry + 1))/$((MAX_RETRIES + 1)))..."
-  session_file="/tmp/bv-verifier-session.jsonl"
-  cp "$latest" "$session_file"
+  session_content=$(cat "$latest")
+  verifier_prompt="BUILDER SESSION LOG (JSONL):
+$session_content
+---
+VERIFICATION TASK:
+Original task: $task
 
-  task_oneline=$(echo "$task" | tr '\n' ' ')
-  verifier_prompt="Read the file $session_file — it contains the builder's JSONL session log. Then audit it against this task: $task_oneline — Return only the JSON report as specified in your instructions."
-  tmux send-keys -t "$VERIFIER_PANE" "$verifier_prompt" Enter
+Audit the session log. Return only the JSON report as specified in your instructions."
+
+  printf '%s' "$verifier_prompt" > /tmp/bv-verifier-prompt.txt
+  tmux load-buffer /tmp/bv-verifier-prompt.txt
+  tmux paste-buffer -p -t "$VERIFIER_PANE"
+  tmux send-keys -t "$VERIFIER_PANE" Enter
+  rm -f /tmp/bv-verifier-prompt.txt
 
   # Wait for verifier to finish
   wait_for_idle "$VERIFIER_PANE" "Verifier" 10
