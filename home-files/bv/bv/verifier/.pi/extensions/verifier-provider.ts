@@ -5,7 +5,7 @@ export default function (pi: ExtensionAPI) {
     name: "llama-cpp",
     baseUrl: "http://dualie.home.lan:8001/v1",
     apiKey: "not-required",
-    api: "openai-completions",
+    api: "openai",
 
     models: [
       {
@@ -14,7 +14,7 @@ export default function (pi: ExtensionAPI) {
         contextWindow: 65536,
         maxTokens: 16384,
         input: ["text"],
-        reasoning: false,
+        reasoning: true,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
       },
@@ -24,7 +24,7 @@ export default function (pi: ExtensionAPI) {
         contextWindow: 131072,
         maxTokens: 16384,
         input: ["text"],
-        reasoning: false,
+        reasoning: true,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
       },
