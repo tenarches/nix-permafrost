@@ -93,31 +93,37 @@ function truncateSession(content: string, maxChars: number): string {
     }
   }
 
-  // Last entry is always kept (completion summary)
+  // Last entry is always kept first (completion summary)
   const lastEntry = lines[lines.length - 1];
-  const hasLastInPriority = priority.length > 0 && priority[priority.length - 1] === lastEntry;
-  if (!hasLastInPriority && lastEntry) {
-    priority.push(lastEntry);
-    const lastIdx = rest.lastIndexOf(lastEntry);
-    if (lastIdx !== -1) rest.splice(lastIdx, 1);
-  }
-
   let budget = maxChars;
   const kept: string[] = [];
 
-  // Priority entries first
+  if (lastEntry) {
+    kept.push(lastEntry);
+    budget -= lastEntry.length + 1;
+    // Remove from whichever list it landed in so it isn't added twice
+    const pIdx = priority.lastIndexOf(lastEntry);
+    if (pIdx !== -1) priority.splice(pIdx, 1);
+    const rIdx = rest.lastIndexOf(lastEntry);
+    if (rIdx !== -1) rest.splice(rIdx, 1);
+  }
+
+  // Priority entries next
   for (const line of priority) {
     if (budget - line.length - 1 < 0) break;
-    kept.push(line);
+    kept.unshift(line);
     budget -= line.length + 1;
   }
 
   // Fill remaining budget with non-priority entries, newest first
+  const filling: string[] = [];
   for (let i = rest.length - 1; i >= 0; i--) {
     if (budget - rest[i].length - 1 < 0) break;
-    kept.unshift(rest[i]);
+    filling.push(rest[i]);
     budget -= rest[i].length + 1;
   }
+  filling.reverse();
+  kept.unshift(...filling);
 
   return kept.join("\n");
 }
