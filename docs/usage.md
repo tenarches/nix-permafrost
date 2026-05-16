@@ -127,8 +127,8 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
     ```
     This creates a tmux session named `bv` with the following layout:
     - **Top-Left (0.0):** Builder Agent (`pi`)
-    - **Top-Right (0.2):** Verifier Agent (`pi`)
-    - **Bottom-Left (0.1):** Coordinator Script
+    - **Top-Right (0.1):** Verifier Agent (`pi`)
+    - **Bottom-Left (0.2):** Coordinator Script
     - **Bottom-Right (0.3):** Live Session Log Watcher
 
 2.  **Attach to Session:**
@@ -137,7 +137,7 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
     ```
 
 3.  **Run a Task:**
-    In the **bottom-left pane (0.1)**, run:
+    In the **bottom-left pane (0.2)**, run:
     ```bash
     ./coordinator.sh path/to/task.md
     ```
