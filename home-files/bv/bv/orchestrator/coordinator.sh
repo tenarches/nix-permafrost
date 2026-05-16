@@ -66,9 +66,11 @@ extract_report() {
 }
 
 # --- Send initial task to builder ---
-tmux send-keys -t "$BUILDER_PANE" "/skill:prime
-
-$task" Enter
+printf '/skill:prime\n\n%s' "$task" > /tmp/bv-builder-task.txt
+tmux load-buffer /tmp/bv-builder-task.txt
+tmux paste-buffer -p -t "$BUILDER_PANE"
+tmux send-keys -t "$BUILDER_PANE" Enter
+rm -f /tmp/bv-builder-task.txt
 echo "[coordinator] Task sent to builder."
 
 # --- Main loop ---
@@ -76,7 +78,7 @@ while true; do
   # Wait for builder to finish (session file stops growing)
   echo "[coordinator] Waiting for builder..."
   while true; do
-    latest=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | head -1)
+    latest=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | head -1) || true
     [[ -z "$latest" ]] && { sleep 2; continue; }
 
     size_a=$(stat -c%s "$latest")
