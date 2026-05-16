@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
 const HOME = process.env.HOME ?? "/home/agent";
 const LOGIC_DIR = join(HOME, ".bv-logic");
 const DATA_DIR = join(HOME, "bv");
-const WORKSPACE_DIR = join(HOME, "workspace");
+const WORKSPACE_DIR = process.env.BV_PROJECT_ROOT ?? join(HOME, "workspace");
 
 const BUILDER_CWD = join(LOGIC_DIR, "builder");
 const VERIFIER_CWD = join(LOGIC_DIR, "verifier");
@@ -188,7 +188,7 @@ export class Orchestrator {
       modelRegistry,
       model: builderModel,
       cwd: WORKSPACE_DIR,
-      settingsDir: BUILDER_CWD,
+      agentDir: BUILDER_CWD,
     });
 
     this.builderSession = session;
@@ -402,7 +402,7 @@ export class Orchestrator {
       modelRegistry,
       model: verifierModel,
       cwd: WORKSPACE_DIR,
-      settingsDir: VERIFIER_CWD,
+      agentDir: VERIFIER_CWD,
     });
 
     const collector = this.attachObserver(session, "VERIFY");

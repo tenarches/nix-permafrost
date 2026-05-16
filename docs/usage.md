@@ -83,7 +83,7 @@ The verifier endpoint is hardcoded to `http://dualie.home.lan:8001/v1` in three 
 | File | Field |
 |---|---|
 | `modules/inventory.nix:152` | `LLAMA_CPP_ENDPOINT` env var |
-| `home-files/bv/bv/verifier/.pi/extensions/verifier-provider.ts:6` | `baseUrl` |
+| `home-files/bv/bv/verifier/extensions/verifier-provider.ts:6` | `baseUrl` |
 | `home-files/shared/.pi/agent/models.json:5,29` | `baseUrl` (both providers) |
 
 After changing these files, rebuild the VM (`sudo nix run .#bv`).
@@ -106,6 +106,16 @@ Inside the `bv` VM, you must perform a one-time setup for the orchestrator depen
     pi /login
     ```
     *Follow the OAuth flow to link your Google subscription. This token is shared between the Builder and Verifier.*
+
+### Setting the Project Root
+
+By default, both agents start in `~/workspace` (the shared workspace root). To target a specific project, set `BV_PROJECT_ROOT` before initializing:
+
+```bash
+export BV_PROJECT_ROOT=~/workspace/my-project
+```
+
+This affects the builder's and verifier's working directory in both interactive and headless modes. If unset, it defaults to `~/workspace`.
 
 ### Mode 1: Interactive (TMUX)
 Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.

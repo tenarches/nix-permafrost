@@ -15,6 +15,10 @@ set -euo pipefail
 
 SESSION="bv"
 LLAMA_ENDPOINT="${LLAMA_CPP_ENDPOINT:-http://dualie.home.lan:8001}"
+PROJECT_ROOT="${BV_PROJECT_ROOT:-$HOME/workspace}"
+BUILDER_DIR="$HOME/.bv-logic/builder"
+VERIFIER_DIR="$HOME/.bv-logic/verifier"
+SESSIONS_DIR="$HOME/bv/sessions"
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "Session '$SESSION' already exists."
@@ -31,6 +35,17 @@ else
   echo "[warn] Verifier endpoint at $LLAMA_ENDPOINT is not responding."
   echo "       The verifier will fail until llama-server is running."
   echo "       Continuing with layout setup..."
+fi
+
+# --- Share auth with builder/verifier agent dirs ---
+mkdir -p "$SESSIONS_DIR"
+if [[ -f "$HOME/.pi/agent/auth.json" ]]; then
+  ln -sf "$HOME/.pi/agent/auth.json" "$BUILDER_DIR/auth.json"
+  ln -sf "$HOME/.pi/agent/auth.json" "$VERIFIER_DIR/auth.json"
+  echo "[init] Auth linked to builder and verifier."
+else
+  echo "[warn] No auth found at ~/.pi/agent/auth.json."
+  echo "       Run 'pi /login' first, then re-run this script."
 fi
 
 # --- Create session ---
@@ -63,19 +78,20 @@ tmux split-window -h -t "$SESSION:0.1"
 # Pane 0 (top-left): Builder — Gemini via Pi
 tmux select-pane -t "$SESSION:0.0" -T "BUILDER [Gemini]"
 tmux send-keys -t "$SESSION:0.0" \
-  "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/builder && cd ~/workspace && pi" Enter
+  "export PI_CODING_AGENT_DIR=$BUILDER_DIR && cd $PROJECT_ROOT && pi --session-dir $SESSIONS_DIR" Enter
 
 # Pane 2 (top-right): Verifier — Qwen via Pi + local llama.cpp
 tmux select-pane -t "$SESSION:0.2" -T "VERIFIER [Qwen]"
 tmux send-keys -t "$SESSION:0.2" \
-  "export PI_CODING_AGENT_SETTINGS_DIR=~/.bv-logic/verifier && cd ~/workspace && pi" Enter
+  "export PI_CODING_AGENT_DIR=$VERIFIER_DIR && cd $PROJECT_ROOT && pi" Enter
 
 # Pane 1 (bottom-left): Coordinator — where you run tasks
 tmux select-pane -t "$SESSION:0.1" -T "COORDINATOR"
 tmux send-keys -t "$SESSION:0.1" "cd ~/.bv-logic/orchestrator && clear && echo '
 === BV Coordinator ===
-Run a task:  ./coordinator.sh path/to/task.md
-Headless:    npm start -- --task \"description\"
+Project root: $PROJECT_ROOT
+Run a task:   ./coordinator.sh path/to/task.md
+Headless:     npm start -- --task \"description\"
 '" Enter
 
 # Pane 3 (bottom-right): Live session log — waits for files if none exist yet
