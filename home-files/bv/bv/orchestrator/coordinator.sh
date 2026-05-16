@@ -93,6 +93,12 @@ while true; do
   # Fire verifier — use bracketed paste to send multi-line content safely
   echo "[coordinator] Firing verifier (attempt $((retry + 1))/$((MAX_RETRIES + 1)))..."
   session_content=$(cat "$latest")
+  session_len=${#session_content}
+  MAX_SESSION_CHARS=240000
+  if [[ $session_len -gt $MAX_SESSION_CHARS ]]; then
+    echo "[coordinator] Session too large (${session_len} chars), truncating to ${MAX_SESSION_CHARS}..."
+    session_content="${session_content:0:$MAX_SESSION_CHARS}"
+  fi
   verifier_prompt="BUILDER SESSION LOG (JSONL):
 $session_content
 ---
