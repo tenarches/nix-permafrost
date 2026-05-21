@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SESSION="bv"
-LLAMA_ENDPOINT="${LLAMA_CPP_ENDPOINT:-http://dualie.home.lan:8001}"
+LLAMA_ENDPOINT="${LLAMA_CPP_ENDPOINT:-http://petunia.home.lan:8001}"
 PROJECT_ROOT="${BV_PROJECT_ROOT:-$HOME/workspace}"
 BUILDER_DIR="$HOME/.bv-logic/builder"
 VERIFIER_DIR="$HOME/.bv-logic/verifier"
@@ -87,7 +87,7 @@ tmux send-keys -t "$SESSION:0.0" \
 # Pane 1 (top-right): Verifier — Qwen via Pi + local llama.cpp
 tmux select-pane -t "$SESSION:0.1" -T "VERIFIER [Qwen]"
 tmux send-keys -t "$SESSION:0.1" \
-  "export PI_CODING_AGENT_DIR=$VERIFIER_DIR && cd $PROJECT_ROOT && pi --provider llama-cpp-local --model qwen3.6-35b-a3b-coding-agent-64k" Enter
+  "export PI_CODING_AGENT_DIR=$VERIFIER_DIR && cd $PROJECT_ROOT && pi --provider llama-cpp-local --model qwen3.6-35b-a3b-coding-agent-mtp-128k" Enter
 
 # Pane 2 (bottom-left): Coordinator — where you run tasks
 tmux select-pane -t "$SESSION:0.2" -T "COORDINATOR"

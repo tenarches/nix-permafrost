@@ -27,8 +27,8 @@ const VERIFIER_CWD = join(LOGIC_DIR, "verifier");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
 
 const BUILDER_MODEL = "gemini-2.5-pro-preview-06-05";
-const VERIFIER_MODEL_64K = "qwen3.6-35b-a3b-coding-agent-64k";
-const VERIFIER_MODEL_128K = "qwen3.6-verifier-128k";
+const VERIFIER_MODEL_64K = "qwen3.6-35b-a3b-coding-agent-mtp-128k";
+const VERIFIER_MODEL_128K = "qwen3.6-35b-a3b-coding-agent-mtp-128k";
 
 const MAX_RETRIES = 2;
 const TIER2_CHAR_THRESHOLD = 200_000;

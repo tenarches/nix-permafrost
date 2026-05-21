@@ -149,7 +149,7 @@ let
         GITHUB_TOKEN = "/run/secrets/github-token";
       };
       env = {
-        LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
+        LLAMA_CPP_ENDPOINT = "http://petunia.home.lan:8001";
       };
 
       homeFiles =

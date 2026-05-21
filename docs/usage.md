@@ -78,7 +78,7 @@ For 128k context (large sessions), start a second instance or reconfigure with `
 
 **3. Configure the endpoint:**
 
-The verifier endpoint is hardcoded to `http://dualie.home.lan:8001/v1` in three places. If your llama.cpp server runs on a different host or port, update all three:
+The verifier endpoint is hardcoded to `http://petunia.home.lan:8001/v1` in three places. If your llama.cpp server runs on a different host or port, update all three:
 
 | File | Field |
 |---|---|

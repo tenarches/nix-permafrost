@@ -11,13 +11,13 @@
       },
       "models": [
         {
-          "id": "qwen3.6-35b-a3b-coding-agent-64k",
+          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
           "name": "Qwen 3.6 35B Verifier (64k)",
           "contextWindow": 64000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
         {
-          "id": "qwen3.6-verifier-128k",
+          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
           "name": "Qwen 3.6 35B Verifier (128k)",
           "contextWindow": 128000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
@@ -31,13 +31,13 @@
       "api": "openai",
       "models": [
         {
-          "id": "qwen3.6-35b-a3b-coding-agent-64k",
+          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
           "name": "Qwen 3.6 35B Verifier (64k)",
           "contextWindow": 64000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
         {
-          "id": "qwen3.6-verifier-128k",
+          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
           "name": "Qwen 3.6 35B Verifier (128k)",
           "contextWindow": 128000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
