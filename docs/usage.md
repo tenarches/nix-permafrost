@@ -49,6 +49,51 @@ Directories declared in `persistentShares` map host paths into the guest. These 
 
 The `bv` agent is the project's flagship "Agentic Harness." It implements an autonomous dual-agent architecture (Gemini Builder + Qwen Verifier).
 
+### Prerequisites
+
+The BV system requires two external services:
+
+1. **Google Gemini API access** — the Builder uses Gemini 2.5 Pro. You need a Google AI subscription with API access.
+2. **Local llama.cpp server** — the Verifier uses Qwen 3.6 35B-A3B served via llama.cpp on the host (or another machine on your network).
+
+### Verifier Model Setup
+
+The Verifier agent runs Qwen 3.6 35B-A3B via a local llama.cpp server. This must be running and reachable from inside the BV guest VM before you start any verification.
+
+**1. Download the model:**
+
+Download a GGUF quantization of Qwen 3.6 35B-A3B (e.g., Q4_K_M or Q5_K_M) from Hugging Face.
+
+**2. Start llama-server:**
+```bash
+llama-server \
+  --model path/to/qwen3.6-35b-a3b.gguf \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --ctx-size 65536 \
+  --n-gpu-layers 99
+```
+
+For 128k context (large sessions), start a second instance or reconfigure with `--ctx-size 131072`.
+
+**3. Configure the endpoint:**
+
+The verifier endpoint is hardcoded to `http://petunia.home.lan:8001/v1` in three places. If your llama.cpp server runs on a different host or port, update all three:
+
+| File | Field |
+|---|---|
+| `modules/inventory.nix:152` | `LLAMA_CPP_ENDPOINT` env var |
+| `home-files/bv/bv/verifier/extensions/verifier-provider.ts:6` | `baseUrl` |
+| `home-files/shared/.pi/agent/models.json:5,29` | `baseUrl` (both providers) |
+
+After changing these files, rebuild the VM (`sudo nix run .#bv`).
+
+**4. Verify connectivity from inside the guest:**
+```bash
+curl http://your-host:8001/v1/models
+```
+You should see a JSON response listing the loaded model.
+
 ### Initial Setup
 Inside the `bv` VM, you must perform a one-time setup for the orchestrator dependencies and authentication:
 1.  **Install dependencies:**
@@ -62,6 +107,16 @@ Inside the `bv` VM, you must perform a one-time setup for the orchestrator depen
     ```
     *Follow the OAuth flow to link your Google subscription. This token is shared between the Builder and Verifier.*
 
+### Setting the Project Root
+
+By default, both agents start in `~/workspace` (the shared workspace root). To target a specific project, set `BV_PROJECT_ROOT` before initializing:
+
+```bash
+export BV_PROJECT_ROOT=~/workspace/my-project
+```
+
+This affects the builder's and verifier's working directory in both interactive and headless modes. If unset, it defaults to `~/workspace`.
+
 ### Mode 1: Interactive (TMUX)
 Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.
 
@@ -72,8 +127,8 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
     ```
     This creates a tmux session named `bv` with the following layout:
     - **Top-Left (0.0):** Builder Agent (`pi`)
-    - **Top-Right (0.2):** Verifier Agent (`pi`)
-    - **Bottom-Left (0.1):** Coordinator Script
+    - **Top-Right (0.1):** Verifier Agent (`pi`)
+    - **Bottom-Left (0.2):** Coordinator Script
     - **Bottom-Right (0.3):** Live Session Log Watcher
 
 2.  **Attach to Session:**
@@ -82,17 +137,20 @@ Best for watching the agents work or debugging prompts. This mode requires a spe
     ```
 
 3.  **Run a Task:**
-    In the **bottom-left pane (0.1)**, run:
+    In the **bottom-left pane (0.2)**, run:
     ```bash
     ./coordinator.sh path/to/task.md
     ```
-    The coordinator will:
-    - Paste the task into the Builder's prompt (top-left).
-    - Wait for the Builder to finish (watching the filesystem for JSONL updates).
-    - Paste the audit prompt into the Verifier (top-right).
-    - Display progress in the Log Watcher (bottom-right).
+    The coordinator drives a full build-verify-feedback loop:
+    1. Sends the task to the Builder (top-left) with the `prime` skill.
+    2. Waits for the Builder to finish (session JSONL file size stabilizes).
+    3. Copies the session log into the Verifier pane (top-right) via tmux paste.
+    4. Waits for the Verifier to finish, then extracts its JSON report.
+    5. If **PASSED** — exits successfully.
+    6. If **FAILED** — extracts the `feedback_for_builder` field and sends it back to the Builder for a retry (up to 2 retries, 3 total attempts).
+    7. If retries exhausted — exits with failure and prints the final report.
 
-*Tip: If the coordinator hangs at "Waiting for session...", ensure the Builder has actually started and is receiving input.*
+    Progress is visible in all four panes. The session log watcher (bottom-right) shows the JSONL stream in real time.
 
 ### Mode 2: Headless (Orchestrator)
 Best for automated implementation and verification.
@@ -107,6 +165,43 @@ The orchestrator executes a five-stage loop:
 3.  **Lint:** Runs `tsc` and `eslint` automatically.
 4.  **Verify:** Verifier audits the session log against the claims.
 5.  **Feedback:** Automatically retries up to 2 times on failure.
+
+### Notification Bus (Optional)
+
+The headless orchestrator emits structured lifecycle events (build started, verify passed, etc.) via a webhook. Configure it by editing `home-files/bv/bv/notify.json`:
+
+```json
+{
+  "webhookUrl": "http://your-webhook-endpoint",
+  "commandListenerEnabled": true,
+  "commandListenerPort": 9876
+}
+```
+
+- **`webhookUrl`**: Where to POST event payloads. Leave as the placeholder value to disable webhook delivery — events still log to stderr.
+- **`commandListenerEnabled`**: Starts an HTTP server on port 9876 inside the guest, accepting `abort`, `pause`, `continue`, `inject`, and `status` commands as JSON POST requests.
+
+The notification bus is not required for either mode to function.
+
+### Troubleshooting
+
+**Verifier always returns FAILED/UNCERTAIN:**
+- Check that the llama.cpp server is running and reachable from inside the guest (`curl http://your-host:8001/v1/models`).
+- Verify the `api` field in `verifier-provider.ts` is `"openai"` (not `"openai-completions"`).
+- Check stderr output for `[VERIFY]` lines — if no text_delta events appear, the model endpoint is not responding.
+
+**Coordinator hangs at "Waiting for builder...":**
+- The Builder must be running in its pane and actively writing to `~/bv/sessions/`. Check that the Builder pane (top-left) shows an active Pi session.
+- If no `.jsonl` files exist in `~/bv/sessions/`, the Builder hasn't started processing yet.
+
+**"tmux session 'bv' already exists":**
+- Run `tmux kill-session -t bv` to clean up a stale session, then re-run `./init-bv.sh`.
+
+**Large sessions cause verifier errors:**
+- The orchestrator automatically truncates sessions that exceed the model's context window (240k chars for 64k model, 496k for 128k). If truncation drops critical entries, consider using the 128k model by ensuring your llama.cpp server supports 128k context length.
+
+**Coordinator can't extract JSON report:**
+- The Verifier is instructed to output compact JSON. If it produces multi-line JSON, the coordinator's grep-based extraction may fail. Check the Verifier pane output directly.
 
 ## External Tools (MCP)
 

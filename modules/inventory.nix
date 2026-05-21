@@ -149,8 +149,7 @@ let
         GITHUB_TOKEN = "/run/secrets/github-token";
       };
       env = {
-        LLAMA_CPP_ENDPOINT = "http://dualie.home.lan:8001";
-        PI_CODING_AGENT_SESSION_DIR = "/home/agent/bv/sessions";
+        LLAMA_CPP_ENDPOINT = "http://petunia.home.lan:8001";
       };
 
       homeFiles =
@@ -161,16 +160,20 @@ let
           ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
           ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
           ".bv-logic/notify.json".source = bvFiles + "/bv/notify.json";
+          # Builder agent dir — Pi reads PI_CODING_AGENT_DIR to find these
           ".bv-logic/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
-          ".bv-logic/builder/.pi/extensions/bash-lockdown.ts".source =
-            bvFiles + "/bv/builder/.pi/extensions/bash-lockdown.ts";
-          ".bv-logic/builder/.pi/skills/prime.md".source = bvFiles + "/bv/builder/.pi/skills/prime.md";
-          ".bv-logic/builder/.pi/skills/mcporter.md".source = bvFiles + "/bv/builder/.pi/skills/mcporter.md";
+          ".bv-logic/builder/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".bv-logic/builder/extensions/bash-lockdown.ts".source =
+            bvFiles + "/bv/builder/extensions/bash-lockdown.ts";
+          ".bv-logic/builder/skills/prime.md".source = bvFiles + "/bv/builder/skills/prime.md";
+          ".bv-logic/builder/skills/mcporter.md".source = bvFiles + "/bv/builder/skills/mcporter.md";
+          # Verifier agent dir
           ".bv-logic/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
-          ".bv-logic/verifier/.pi/extensions/verifier-provider.ts".source =
-            bvFiles + "/bv/verifier/.pi/extensions/verifier-provider.ts";
-          ".bv-logic/verifier/.pi/extensions/readonly-enforcer.ts".source =
-            bvFiles + "/bv/verifier/.pi/extensions/readonly-enforcer.ts";
+          ".bv-logic/verifier/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".bv-logic/verifier/extensions/verifier-provider.ts".source =
+            bvFiles + "/bv/verifier/extensions/verifier-provider.ts";
+          ".bv-logic/verifier/extensions/readonly-enforcer.ts".source =
+            bvFiles + "/bv/verifier/extensions/readonly-enforcer.ts";
           ".bv-logic/orchestrator/package.json".source = bvFiles + "/bv/orchestrator/package.json";
           ".bv-logic/orchestrator/tsconfig.json".source = bvFiles + "/bv/orchestrator/tsconfig.json";
           ".bv-logic/orchestrator/coordinator.sh" = {

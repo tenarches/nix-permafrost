@@ -20,15 +20,15 @@ const execFileAsync = promisify(execFile);
 const HOME = process.env.HOME ?? "/home/agent";
 const LOGIC_DIR = join(HOME, ".bv-logic");
 const DATA_DIR = join(HOME, "bv");
-const WORKSPACE_DIR = join(HOME, "workspace");
+const WORKSPACE_DIR = process.env.BV_PROJECT_ROOT ?? join(HOME, "workspace");
 
 const BUILDER_CWD = join(LOGIC_DIR, "builder");
 const VERIFIER_CWD = join(LOGIC_DIR, "verifier");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
 
 const BUILDER_MODEL = "gemini-2.5-pro-preview-06-05";
-const VERIFIER_MODEL_64K = "qwen3.6-35b-a3b-coding-agent-64k";
-const VERIFIER_MODEL_128K = "qwen3.6-verifier-128k";
+const VERIFIER_MODEL_64K = "qwen3.6-35b-a3b-coding-agent-mtp-128k";
+const VERIFIER_MODEL_128K = "qwen3.6-35b-a3b-coding-agent-mtp-128k";
 
 const MAX_RETRIES = 2;
 const TIER2_CHAR_THRESHOLD = 200_000;
@@ -64,6 +64,70 @@ interface VerifierReport {
     what_could_not_be_verified: string;
     feedback_for_builder?: string;
   };
+}
+
+interface TextCollector {
+  text: string;
+}
+
+function truncateSession(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+
+  const lines = content.split("\n").filter((l) => l.trim());
+  const priority: string[] = [];
+  const rest: string[] = [];
+
+  for (const line of lines) {
+    let isPriority = false;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "bashExecution") isPriority = true;
+      if (entry.type === "tool_result" && (entry.name === "write" || entry.name === "edit")) isPriority = true;
+    } catch {
+      // non-JSON line, treat as non-priority
+    }
+    if (isPriority) {
+      priority.push(line);
+    } else {
+      rest.push(line);
+    }
+  }
+
+  // Last entry is always kept first (completion summary)
+  const lastEntry = lines[lines.length - 1];
+  let budget = maxChars;
+  const kept: string[] = [];
+
+  if (lastEntry) {
+    kept.push(lastEntry);
+    budget -= lastEntry.length + 1;
+    // Remove from whichever list it landed in so it isn't added twice
+    const pIdx = priority.lastIndexOf(lastEntry);
+    if (pIdx !== -1) priority.splice(pIdx, 1);
+    const rIdx = rest.lastIndexOf(lastEntry);
+    if (rIdx !== -1) rest.splice(rIdx, 1);
+  }
+
+  // Priority entries next (collected forward, then prepended to preserve order)
+  const priorityKept: string[] = [];
+  for (const line of priority) {
+    if (budget - line.length - 1 < 0) break;
+    priorityKept.push(line);
+    budget -= line.length + 1;
+  }
+  kept.unshift(...priorityKept);
+
+  // Fill remaining budget with non-priority entries, newest first
+  const filling: string[] = [];
+  for (let i = rest.length - 1; i >= 0; i--) {
+    if (budget - rest[i].length - 1 < 0) break;
+    filling.push(rest[i]);
+    budget -= rest[i].length + 1;
+  }
+  filling.reverse();
+  kept.unshift(...filling);
+
+  return kept.join("\n");
 }
 
 // ─── Orchestrator ─────────────────────────────────────────────────────────────
@@ -124,7 +188,7 @@ export class Orchestrator {
       modelRegistry,
       model: builderModel,
       cwd: WORKSPACE_DIR,
-      settingsDir: BUILDER_CWD,
+      agentDir: BUILDER_CWD,
     });
 
     this.builderSession = session;
@@ -134,7 +198,8 @@ export class Orchestrator {
     await this.builderSession.prompt("/skill:prime");
   }
 
-  private attachObserver(session: any, label: string): void {
+  private attachObserver(session: any, label: string): TextCollector {
+    const collector: TextCollector = { text: "" };
     const onEvent = (event: any) => {
       if (!event) return;
       switch (event.type) {
@@ -142,6 +207,7 @@ export class Orchestrator {
           const ae = event.assistantMessageEvent;
           if (!ae) return;
           if (ae.type === "text_delta") {
+            collector.text += ae.delta;
             process.stderr.write(`[${label}] ${ae.delta}`);
           } else if (ae.type === "thinking_delta") {
             process.stderr.write(`[${label}:think] ${ae.delta}`);
@@ -164,6 +230,7 @@ export class Orchestrator {
     } else if (session.events && typeof session.events.on === "function") {
       session.events.on("data", onEvent);
     }
+    return collector;
   }
 
   private async build(feedbackPrompt?: string): Promise<void> {
@@ -238,8 +305,10 @@ export class Orchestrator {
       sessionContent.length >= TIER2_CHAR_THRESHOLD
         ? VERIFIER_MODEL_128K
         : VERIFIER_MODEL_64K;
+    const maxChars = verifierModel === VERIFIER_MODEL_128K ? 496_000 : 240_000;
+    const truncated = truncateSession(sessionContent, maxChars);
 
-    const report = await this.runVerifier(sessionContent, verifierModel);
+    const report = await this.runVerifier(truncated, verifierModel);
     this.lastReport = report;
 
     if (report.status === "PASSED") {
@@ -333,10 +402,10 @@ export class Orchestrator {
       modelRegistry,
       model: verifierModel,
       cwd: WORKSPACE_DIR,
-      settingsDir: VERIFIER_CWD,
+      agentDir: VERIFIER_CWD,
     });
 
-    this.attachObserver(session, "VERIFY");
+    const collector = this.attachObserver(session, "VERIFY");
 
     const prompt = [
       "BUILDER SESSION LOG (JSONL):",
@@ -349,7 +418,7 @@ export class Orchestrator {
     ].join("\n");
 
     await session.prompt(prompt);
-    const raw = session.getLastAssistantText() ?? "";
+    const raw = collector.text;
     return this.parseReport(raw);
   }
 
