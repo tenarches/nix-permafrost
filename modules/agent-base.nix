@@ -165,50 +165,70 @@
     "d /home/agent/.bv-logic 0700 agent users - -"
   ];
 
-  # Essential packages for agent operation, terminal persistence, and GUI support
-  environment.systemPackages = with pkgs; [
-    git
-    bash
-    coreutils
-    curl
-    gnutar
-    gzip
-    xz
-    tmux
-    jq
-    # GUI Support libraries (Mesa/GL)
-    mesa
-    libGL
-    vulkan-loader
-    # Wayland/X11 client libraries for Electron
-    wayland
-    libX11
-    libXcursor
-    libXrandr
-    libXi
-  ];
+  environment = {
+    # Essential packages for agent operation, terminal persistence, and GUI support
+    systemPackages = with pkgs; [
+      git
+      bash
+      coreutils
+      curl
+      gnutar
+      gzip
+      xz
+      tmux
+      jq
+      # GUI Support libraries (Mesa/GL)
+      mesa
+      libGL
+      vulkan-loader
+      # Wayland/X11 client libraries for Electron
+      wayland
+      libX11
+      libXcursor
+      libXrandr
+      libXi
+    ];
 
-  # Helper to set WAYLAND_DISPLAY from kernel command line
-  environment.loginShellInit = ''
-    if [[ -z "$WAYLAND_DISPLAY" || "$WAYLAND_DISPLAY" == "@@HOST_WAYLAND_DISPLAY@@" ]]; then
-      # Try to find it in /proc/cmdline (e.g. wayland_display=wayland-1)
-      PROBED_WL=$(cat /proc/cmdline | tr ' ' '\n' | grep '^wayland_display=' | cut -d= -f2 || true)
-      if [ -z "$PROBED_WL" ]; then
-        # Fallback to searching the mount point
-        PROBED_WL=$(ls /run/user/1000/wayland-* 2>/dev/null | head -n1 | xargs basename 2>/dev/null || true)
+    # Helper to set WAYLAND_DISPLAY from kernel command line
+    loginShellInit = ''
+      if [[ -z "$WAYLAND_DISPLAY" || "$WAYLAND_DISPLAY" == "@@HOST_WAYLAND_DISPLAY@@" ]]; then
+        # Try to find it in /proc/cmdline (e.g. wayland_display=wayland-1)
+        PROBED_WL=$(cat /proc/cmdline | tr ' ' '\n' | grep '^wayland_display=' | cut -d= -f2 || true)
+        if [ -z "$PROBED_WL" ]; then
+          # Fallback to searching the mount point
+          PROBED_WL=$(ls /run/user/1000/wayland-* 2>/dev/null | head -n1 | xargs basename 2>/dev/null || true)
+        fi
+        if [ -n "$PROBED_WL" ]; then
+          export WAYLAND_DISPLAY="$PROBED_WL"
+        else
+          export WAYLAND_DISPLAY="wayland-0"
+        fi
       fi
-      if [ -n "$PROBED_WL" ]; then
-        export WAYLAND_DISPLAY="$PROBED_WL"
-      else
-        export WAYLAND_DISPLAY="wayland-0"
-      fi
-    fi
-  '';
+    '';
+
+    # SSH Configuration for JIT MicroVM lifecycle
+    #
+    # The AuthorizedKeysCommand path must not traverse /nix/store — sshd rejects
+    # commands whose path passes through a directory it deems unsafe (the overlay
+    # nix store in a microvm fails that check). Script lives in /etc/ssh instead.
+    etc."ssh/get-ssh-keys" = {
+      mode = "0755";
+      user = "root";
+      group = "root";
+      text = ''
+        #!/bin/sh
+        if [ "$1" = "agent" ] || [ "$1" = "root" ]; then
+          if [ -f /run/credentials/sshd.service/ssh.authorized_keys.base64 ]; then
+            ${pkgs.coreutils}/bin/base64 -d /run/credentials/sshd.service/ssh.authorized_keys.base64
+          fi
+        fi
+      '';
+    };
+  };
 
   # Enable autologin on the serial console for nix run ergonomics
   services.getty.autologinUser = "agent";
 
-  # SSH Configuration for JIT MicroVM lifecycle
   services.openssh = {
     enable = true;
     settings = {
@@ -216,14 +236,7 @@
       KbdInteractiveAuthentication = false;
       PermitRootLogin = "prohibit-password";
     };
-    authorizedKeysCommand = "${pkgs.writeShellScript "get-ssh-keys" ''
-      # Only return keys for valid agent users
-      if [ "$1" = "agent" ] || [ "$1" = "root" ]; then
-        if [ -f /run/credentials/sshd.service/ssh.authorized_keys.base64 ]; then
-          ${pkgs.coreutils}/bin/base64 -d /run/credentials/sshd.service/ssh.authorized_keys.base64
-        fi
-      fi
-    ''}";
+    authorizedKeysCommand = "/etc/ssh/get-ssh-keys";
     authorizedKeysCommandUser = "root";
   };
 
