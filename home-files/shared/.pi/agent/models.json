@@ -4,7 +4,7 @@
       "name": "llama-cpp",
       "baseUrl": "http://dualie.home.lan:8001/v1",
       "apiKey": "not-required",
-      "api": "openai",
+      "api": "openai-completions",
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false
@@ -28,7 +28,7 @@
       "name": "llama-cpp",
       "baseUrl": "http://dualie.home.lan:8001/v1",
       "apiKey": "not-required",
-      "api": "openai",
+      "api": "openai-completions",
       "models": [
         {
           "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
@@ -48,7 +48,7 @@
       "name": "llama-cpp-2",
       "baseUrl": "http://petunia.home.lan:8000/v1",
       "apiKey": "not-required",
-      "api": "openai",
+      "api": "openai-completions",
       "models": [
         {
           "id": "qwen3.6-27b-coding-agent-mtp-128k",
