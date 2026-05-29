@@ -206,24 +206,6 @@
       fi
     '';
 
-    # SSH Configuration for JIT MicroVM lifecycle
-    #
-    # The AuthorizedKeysCommand path must not traverse /nix/store — sshd rejects
-    # commands whose path passes through a directory it deems unsafe (the overlay
-    # nix store in a microvm fails that check). Script lives in /etc/ssh instead.
-    etc."ssh/get-ssh-keys" = {
-      mode = "0755";
-      user = "root";
-      group = "root";
-      text = ''
-        #!/bin/sh
-        if [ "$1" = "agent" ] || [ "$1" = "root" ]; then
-          if [ -f /run/credentials/sshd.service/ssh.authorized_keys.base64 ]; then
-            ${pkgs.coreutils}/bin/base64 -d /run/credentials/sshd.service/ssh.authorized_keys.base64
-          fi
-        fi
-      '';
-    };
   };
 
   # Enable autologin on the serial console for nix run ergonomics
@@ -235,14 +217,9 @@
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
       PermitRootLogin = "prohibit-password";
+      AuthorizedKeysFile = "/etc/ssh/authorized_keys.d/%u .ssh/authorized_keys";
     };
-    authorizedKeysCommand = "/etc/ssh/get-ssh-keys";
-    authorizedKeysCommandUser = "root";
   };
-
-  systemd.services.sshd.serviceConfig.LoadCredential = [
-    "ssh.authorized_keys.base64"
-  ];
 
   home-manager = {
     useGlobalPkgs = true;
