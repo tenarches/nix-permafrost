@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SESSION="bv"
-LLAMA_ENDPOINT="${LLAMA_CPP_ENDPOINT:-http://petunia.home.lan:8001}"
+LLAMA_ENDPOINT="${LLAMA_CPP_ENDPOINT:-http://petunia.home.lan:8000}"
 PROJECT_ROOT="${BV_PROJECT_ROOT:-$HOME/workspace}"
 BUILDER_DIR="$HOME/.bv-logic/builder"
 VERIFIER_DIR="$HOME/.bv-logic/verifier"
