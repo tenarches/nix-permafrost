@@ -43,28 +43,6 @@ let
       };
     };
 
-    gemini = {
-      name = "gemini";
-      tapId = "gemini";
-      ip = "192.168.33.11";
-      mac = "02:00:00:00:00:11";
-      vsockCid = 11;
-      workspacePath = "/run/agent-workspaces/gemini";
-      persistentShares = [
-        {
-          host = ".gemini";
-          guest = ".gemini";
-        }
-      ];
-      extraPackages = [
-        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.gemini-cli
-      ]
-      ++ mcpServers;
-      credentials = {
-        GOOGLE_API_KEY = "/run/secrets/google-api-key";
-      };
-    };
-
     opencode = {
       name = "opencode";
       tapId = "ocode";
@@ -136,7 +114,7 @@ let
       ];
       overlays = [
         (_final: prev: {
-          nodejs = prev.nodejs_25;
+          nodejs = prev.nodejs_24;
         })
       ];
       extraPackages = [
@@ -199,12 +177,6 @@ let
       mac = "02:00:00:00:00:12";
       vsockCid = 12;
       workspacePath = "/run/agent-workspaces/antigravity";
-      persistentShares = [
-        {
-          host = ".gemini";
-          guest = ".gemini";
-        }
-      ];
       gui = true;
       extraPackages = [ pkgs.antigravity ];
     };

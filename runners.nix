@@ -357,7 +357,6 @@ let
 in
 {
   claude = mkRunner vms.claude;
-  gemini = mkRunner vms.gemini;
   opencode = mkRunner vms.opencode;
   pi = mkRunner vms.pi;
   bv = mkRunner vms.bv;
