@@ -63,6 +63,20 @@
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
+    },
+    "hermes-coding-agent": {
+      "name": "hermes-coding-agent",
+      "baseUrl": "http://hermes.home.lan:8643/v1",
+      "apiKey": "REDACTED-ROTATED-CREDENTIAL",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "hermes-agent",
+          "name": "hermes-agent-with-tooling",
+          "contextWindow": 131072,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
     }
   }
 }
