@@ -178,7 +178,7 @@ let
       vsockCid = 12;
       workspacePath = "/run/agent-workspaces/antigravity";
       gui = true;
-      extraPackages = [ pkgs.antigravity ];
+      extraPackages = [ pkgs.antigravity-cli ];
     };
 
     crush = {
