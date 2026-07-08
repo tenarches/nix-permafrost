@@ -52,7 +52,7 @@ The flake produces two output categories: **per-system packages** (the runner sc
 graph TD
     FLAKE["flake.nix"]
 
-    subgraph PER_SYSTEM["perSystem (x86_64-linux, aarch64-linux)"]
+    subgraph PER_SYSTEM["perSystem (x86_64-linux)"]
         DEVSHELL["devShells.default<br/>sops + age + virtiofsd"]
         FMT["formatter<br/>nixfmt"]
         HOOKS["pre-commit hooks<br/>nixfmt, deadnix, statix"]
