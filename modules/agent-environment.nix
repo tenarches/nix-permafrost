@@ -6,7 +6,7 @@
 
   home-manager.users.agent = {
     home = {
-      stateVersion = "25.11";
+      stateVersion = "26.05";
       sessionPath = [ "$HOME/.local/bin" ];
       packages = [
         inputs.devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv

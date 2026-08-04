@@ -121,7 +121,7 @@
                 hostPlatform.system = "x86_64-linux";
               };
               networking.hostName = "permafrost";
-              system.stateVersion = "25.11";
+              system.stateVersion = "26.05";
 
               # Minimal config to pass nix flake check
               fileSystems."/" = {
