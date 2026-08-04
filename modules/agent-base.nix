@@ -28,7 +28,50 @@ let
       size = 32768;
       autoCreate = true;
     }
+    {
+      # The agent's whole home, workspace included. btrfs with zstd because the guest
+      # writes into a sparse host image: without TRIM passthrough deleted files never
+      # return blocks, so compression roughly halves how fast the image grows on
+      # source trees, node_modules and build output.
+      image = img "home";
+      mountPoint = "/home/agent";
+      fsType = "btrfs";
+      label = "agent-home";
+      size = 32768;
+      autoCreate = true;
+    }
+    {
+      # Separate from home so root-owned and agent-owned temp files do not collide on
+      # a 0700 home, and so a runaway build fills /tmp rather than the workspace.
+      # Nix builds lean on TMPDIR heavily.
+      image = img "tmp";
+      mountPoint = "/tmp";
+      fsType = "ext4";
+      label = "tmp";
+      size = 16384;
+      autoCreate = true;
+    }
+    {
+      # Raw and unformatted. createVolumesScript has no "swap" fsType, so preStart
+      # truncates this and writes the swap header host-side instead — mkswap writes
+      # only a header (7ms) whereas swapDevices[].size would dd the whole 4 GiB
+      # through virtio-blk on every boot.
+      image = img "swap";
+      mountPoint = null;
+      size = 4096;
+      autoCreate = false;
+    }
   ];
+
+  # Derive the swap device letter with microvm.nix's own helper rather than
+  # hardcoding it, matching on mountPoint == null so it survives reordering above.
+  inherit (import "${inputs.microvm}/lib" { inherit lib; }) withDriveLetters;
+  swapVolume =
+    lib.findFirst (v: v.mountPoint == null) (throw "agent-base: no raw swap volume")
+      (withDriveLetters {
+        inherit volumes;
+        inherit (config.microvm) storeOnDisk;
+      });
 in
 
 {
@@ -63,9 +106,15 @@ in
     # Ephemerality: destroy the previous boot's images before createVolumesScript
     # recreates them. Runs before that script in microvm-run, where PATH is not yet
     # set up, so absolute store paths are required.
+    #
+    # The swap volume is autoCreate = false, so it is created here and given its
+    # header directly. mkswap warns on 0644, hence the chmod; the file stays sparse.
     preStart = ''
       ${pkgs.coreutils}/bin/mkdir -p ${stateDir}
       ${pkgs.coreutils}/bin/rm -f ${stateDir}/*.img
+      ${pkgs.coreutils}/bin/truncate -s ${toString swapVolume.size}M ${swapVolume.image}
+      ${pkgs.coreutils}/bin/chmod 0600 ${swapVolume.image}
+      ${pkgs.util-linux}/bin/mkswap ${swapVolume.image}
     '';
 
     # Holistic Credential Injection for Cloud-Hypervisor
@@ -113,20 +162,21 @@ in
     # discard returns freed blocks to the sparse host image as the store is GC'd.
     "/nix/.rw-store".options = [ "discard" ];
 
-    # Agent user configuration
-    # Agent's home is ephemeral tmpfs — nothing persists
-    "/home/agent" = {
-      device = "none";
-      fsType = "tmpfs";
-      options = [
-        "size=512M"
-        "mode=700"
-        "uid=1000"
-        "gid=100"
-      ];
-      neededForBoot = true;
-    };
+    # Agent's home is an ephemeral disk volume — nothing persists across a boot.
+    # Mount is generated from microvm.volumes; ownership comes from stock NixOS,
+    # since isNormalUser implies createHome = true and homeMode = "700", and
+    # update-users-groups chowns the mounted directory during activation.
+    "/home/agent".options = [
+      "compress=zstd:1"
+      "discard"
+    ];
+
+    "/tmp".options = [ "discard" ];
   };
+
+  # No `size` and no `randomEncryption`: preStart already wrote the header, so the
+  # generated mkswap-*.service body is empty and systemd simply swapons the device.
+  swapDevices = [ { device = "/dev/vd${swapVolume.letter}"; } ];
 
   # Network setup
   networking = {
@@ -189,7 +239,10 @@ in
   # This avoids the "empty directory" issue caused by mounting into a tmpfs
   systemd.tmpfiles.rules = [
     "L+ /home/agent/.agents - - - - /mnt/persist/.agents"
-    "L+ /home/agent/workspace - - - - /mnt/persist/workspace"
+    # workspace is now a plain directory on the ephemeral home volume, not a host
+    # share — so BV_PROJECT_ROOT and orchestrator.ts keep resolving unchanged.
+    "d /home/agent/workspace 0700 agent users - -"
+    "d /tmp 1777 root root - -"
     "d /home/agent/.ssh 0700 agent users - -"
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
