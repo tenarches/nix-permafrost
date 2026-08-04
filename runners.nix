@@ -168,6 +168,9 @@ let
         RUNTIME_NAME="microvm-${spec.name}"
         SOCKET_DIR="/run/$RUNTIME_NAME"
         UNIT_NAME="microvm-${spec.name}"
+        # Host-side home for this VM's ephemeral disk images. Must match stateDir in
+        # modules/agent-base.nix, which keys it on the guest's hostName.
+        STATE_DIR="/var/lib/permafrost/${spec.name}"
         BRIDGE="microbr"
         GATEWAY_IP="192.168.33.1"
         TAP_ID="microvm-${spec.tapId}"
@@ -218,6 +221,15 @@ let
             exit 0
             ;;
           run|start)
+            # Take the lock before the is-active check, otherwise two concurrent
+            # launches can both pass the check and then race the preStart wipe of
+            # this VM's disk images. The fd is held for the life of the script.
+            ${pkgs.coreutils}/bin/mkdir -p "$STATE_DIR"
+            exec 9>"$STATE_DIR/.lock"
+            if ! ${pkgs.util-linux}/bin/flock -n 9; then
+              echo "Error: another launch of ${spec.name} is already in progress."
+              exit 1
+            fi
             if systemctl is-active --quiet "$UNIT_NAME"; then
               echo "Error: $UNIT_NAME is already running."
               exit 1
@@ -253,13 +265,9 @@ let
             ${pkgs.iptables}/bin/iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
         fi
 
-        cleanup() {
-          echo "Permafrost: cleanup complete for ${spec.name}."
-        }
-
-        if [ "$COMMAND" = "run" ]; then
-          trap cleanup EXIT INT TERM
-        fi
+        # NOTE: image cleanup is NOT done here. A shell trap only fires in "run" mode
+        # and never on SIGKILL or host power loss. It is an ExecStopPost property on
+        # the unit instead (see RUN_ARGS), which systemd runs whenever the unit stops.
 
         # Background TAP attachment
         (
@@ -341,6 +349,11 @@ let
           --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
           --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
           --description="Permafrost VM: ${spec.name}"
+          # Reclaim this VM's ephemeral disk images whenever the unit stops — clean
+          # exit, crash, or SIGKILL — in both run and start modes. preStart also
+          # wipes on the next boot, so a host power loss leaves at most one stale
+          # image set, reclaimed on the next launch or by `nix run .#gc`.
+          --property="ExecStopPost=${pkgs.coreutils}/bin/rm -rf $STATE_DIR"
         )
 
         if [ "$COMMAND" = "run" ]; then
