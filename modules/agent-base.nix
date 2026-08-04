@@ -238,11 +238,19 @@ in
   # Automatically symlink persistent mounts from /mnt/persist to home
   # This avoids the "empty directory" issue caused by mounting into a tmpfs
   systemd.tmpfiles.rules = [
+    # The home volume mounts as root:root 0755 and must be chowned to the agent.
+    # users.users.agent.createHome does chown+chmod, but it runs during activation,
+    # which is not ordered after local-fs.target — it chowns the pre-mount directory
+    # and the volume then mounts over it. btrfs has no uid/gid mount options (that is
+    # a tmpfs-only trick), so fix it here: systemd-tmpfiles-setup is After
+    # local-fs.target and part of sysinit.target, so this lands after the mount and
+    # before home-manager-agent.service, which is After basic.target and
+    # home-agent.mount. Without it, HM activation fails on mkdir ~/.cache.
+    "d /home/agent 0700 agent users - -"
     "L+ /home/agent/.agents - - - - /mnt/persist/.agents"
     # workspace is now a plain directory on the ephemeral home volume, not a host
     # share — so BV_PROJECT_ROOT and orchestrator.ts keep resolving unchanged.
     "d /home/agent/workspace 0700 agent users - -"
-    "d /tmp 1777 root root - -"
     "d /home/agent/.ssh 0700 agent users - -"
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
