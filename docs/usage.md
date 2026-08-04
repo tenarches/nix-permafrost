@@ -41,9 +41,27 @@ Files defined in the `homeFiles` attribute of a spec (found in `modules/inventor
 
 ### 2. Persistent Shares (Mutable)
 Directories declared in `persistentShares` map host paths into the guest. These survive VM termination.
-- **`~/workspace`**: Shared working directory across all agents.
 - **`~/.agents`**: Shared state (memories, persistent context).
 - **`~/bv`** (in `bv` VM): Houses session logs and mutable orchestrator state.
+
+### 3. Ephemeral Storage (Destroyed on Restart)
+
+Everything else the agent writes lands on per-VM disk images that are **wiped and recreated
+on every VM start**. Nothing here survives a restart, and nothing is shared between VMs.
+
+- **`~/workspace`**: A private 32 GiB working directory, backed by a btrfs volume with zstd
+  compression. It is **not** a share of the host's `~/workspace` — each VM gets its own.
+- **`/tmp`**: A 16 GiB volume. Nix builds lean on `TMPDIR` heavily, so it is kept off both
+  the root filesystem and the home volume.
+- **`/nix/.rw-store`**: A 32 GiB volume holding the writable overlay above the host's
+  read-only Nix store.
+- **swap**: 4 GiB, re-initialised each boot.
+
+> **If you need something to survive a restart, put it in `~/.agents` or add a
+> `persistentShares` entry in `modules/inventory.nix`.** Work left in `~/workspace` is lost.
+
+Images are sparse, so a booted VM occupies well under 1 MiB of host disk and grows only as
+you write.
 
 ## Builder-Verifier (BV) Workflow
 
@@ -109,13 +127,22 @@ Inside the `bv` VM, you must perform a one-time setup for the orchestrator depen
 
 ### Setting the Project Root
 
-By default, both agents start in `~/workspace` (the shared workspace root). To target a specific project, set `BV_PROJECT_ROOT` before initializing:
+By default, both agents start in `~/workspace`. To target a specific project, set
+`BV_PROJECT_ROOT` before initializing:
 
 ```bash
 export BV_PROJECT_ROOT=~/workspace/my-project
 ```
 
 This affects the builder's and verifier's working directory in both interactive and headless modes. If unset, it defaults to `~/workspace`.
+
+> **`~/workspace` is ephemeral.** It is a private per-VM volume wiped on every VM start, so
+> a BV run left there does not survive a restart. For durable work, clone into `~/bv` — a
+> `persistentShare` — and point `BV_PROJECT_ROOT` at it:
+>
+> ```bash
+> export BV_PROJECT_ROOT=~/bv/my-project
+> ```
 
 ### Mode 1: Interactive (TMUX)
 Best for watching the agents work or debugging prompts. This mode requires a specific 4-pane tmux layout which can be initialized automatically.

@@ -84,13 +84,13 @@ mindmap
     Zero-Copy Performance
       virtiofs shared filesystem
       Host Nix store reuse
-      No disk image creation
-      Instant workspace mounting
+      Sparse ephemeral volumes
+      ~50ms volume setup per boot
     Multi-Agent
       N agents from one flake
       Per-agent credentials
       Per-agent persistent state
-      Shared workspace + .agents
+      Private per-VM workspace
 ```
 
 ---
@@ -184,7 +184,7 @@ sequenceDiagram
 
     SD->>VFS: 4. Launch virtiofsd backends
     activate VFS
-    Note over VFS: One socket per share:<br/>ro-store (read-only Nix store)<br/>+ global shares (workspace, .agents)<br/>+ per-agent persistentShares
+    Note over VFS: One socket per share:<br/>ro-store (read-only Nix store)<br/>+ global share (.agents)<br/>+ per-agent persistentShares
 
     VFS-->>SD: Sockets ready
 
@@ -194,7 +194,7 @@ sequenceDiagram
 
     CHV->>G: 6. Boot guest kernel
     activate G
-    Note over G: Mount virtiofs shares<br/>Create overlay store<br/>tmpfs /home/agent<br/>Symlink persists<br/>Auto-login as agent
+    Note over G: Mount virtiofs shares<br/>Mount ephemeral volumes<br/>Create overlay store<br/>swapon /dev/vdd<br/>Symlink persists<br/>Auto-login as agent
 
     G-->>U: 7. Interactive console
 
@@ -215,14 +215,33 @@ sequenceDiagram
 
 ## Filesystem Architecture
 
-The guest assembles its filesystem from multiple sources. The Nix store uses a read-only share with a writable tmpfs overlay; the home directory is ephemeral; only explicitly declared shares persist.
+The guest assembles its filesystem from three sources: the host's Nix store as a read-only
+virtiofs lowerdir, explicitly declared virtiofs shares that persist, and per-VM disk images
+that are destroyed and recreated on every boot.
+
+Every writable path lives on one of those ephemeral volumes. Only `/` stays in RAM. This is
+deliberate: they were previously tmpfs, which meant an 8 GiB VM held 32 GiB of unreachable
+size caps and `nix run` failed with ENOSPC long before any declared limit.
+
+| Volume | Mount | Filesystem | Size | Device |
+|---|---|---|---|---|
+| `rw-store.img` | `/nix/.rw-store` | ext4 | 32 GiB | `/dev/vda` |
+| `home.img` | `/home/agent` | btrfs + zstd | 32 GiB | `/dev/vdb` |
+| `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
+| `swap.img` | *(raw swap)* | — | 4 GiB | `/dev/vdd` |
+
+Images live at `/var/lib/permafrost/<agent>/` and are sparse, so a booted VM occupies well
+under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot: `mkfs` on
+a sparse image is 27–52 ms, and swap is initialised by writing only a header host-side
+(`mkswap`, ~7 ms) rather than `dd`-ing 4 GiB through virtio-blk on every boot.
 
 ```mermaid
 graph TD
     subgraph HOST_FS["Host Filesystem"]
         H_STORE["/nix/store<br/>(immutable)"]
-        H_GLOBAL["~/workspace, ~/.agents<br/>(global shares)"]
+        H_GLOBAL["~/.agents<br/>(global share)"]
         H_AGENT["~/per-agent paths<br/>(from persistentShares)"]
+        H_IMG["/var/lib/permafrost/(agent)/*.img<br/>(sparse, wiped each boot)"]
     end
 
     subgraph VIRTIOFS["virtiofs (zero-copy)"]
@@ -233,21 +252,28 @@ graph TD
     subgraph GUEST_FS["Guest Filesystem"]
         subgraph NIX_UNION["Nix Store (overlay union)"]
             RO["/nix/.ro-store<br/>(virtiofs, read-only)"]
-            RW["/nix/.rw-store<br/>(tmpfs, ephemeral)"]
+            RW["/nix/.rw-store<br/>(ext4 volume, ephemeral)"]
             UNION["/nix/store<br/>(combined view)"]
         end
 
-        subgraph HOME["tmpfs /home/agent (ephemeral)"]
+        subgraph HOME["/home/agent (btrfs volume, ephemeral)"]
             SYMS["Symlinks into /mnt/persist/*<br/>for each declared share"]
-            EPHEM["All other dotfiles<br/>(destroyed on exit)"]
+            WS["workspace/<br/>(private per-VM, not shared)"]
+            EPHEM["All other dotfiles and caches<br/>(destroyed on exit)"]
         end
 
+        TMPV["/tmp<br/>(ext4 volume, ephemeral)"]
+        SWAP["swap<br/>(raw volume, 4 GiB)"]
         PERSIST["/mnt/persist/*<br/>virtiofs mount points"]
     end
 
     H_STORE -->|virtiofs| VF1 --> RO
     H_GLOBAL -->|virtiofs| VF2 --> PERSIST
     H_AGENT -->|virtiofs| VF2
+    H_IMG -->|virtio-blk| RW
+    H_IMG -->|virtio-blk| HOME
+    H_IMG -->|virtio-blk| TMPV
+    H_IMG -->|virtio-blk| SWAP
     RO --> UNION
     RW --> UNION
     PERSIST --> SYMS

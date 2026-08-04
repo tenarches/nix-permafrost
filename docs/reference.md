@@ -19,7 +19,6 @@ claude = {
   ip = "192.168.33.10";
   mac = "02:00:00:00:00:10";
   vsockCid = 10;
-  workspacePath = "/run/agent-workspaces/claude";
   persistentShares = [
     { host = ".claude"; guest = ".claude"; }
     { host = ".claude.json"; guest = ".claude.json"; is_file = true; }
