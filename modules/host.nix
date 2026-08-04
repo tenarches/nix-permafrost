@@ -31,8 +31,16 @@
     externalInterface = "wlp4s0"; # Default for laptop
   };
 
+  # Disable nested virtualization
+  boot.extraModprobeConfig = "options kvm-amd nested=0";
+
   # Enable IP forwarding for NAT
   boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
+
+  # Privilege escalation mitigation
+  services.udev.extraRules = ''
+    KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"
+  '';
 
   # Required packages on the host
   environment.systemPackages = with pkgs; [
