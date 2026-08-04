@@ -20,14 +20,13 @@ let
   mkRunner =
     spec:
     let
+      # NOTE: the host's ~/workspace is deliberately NOT shared. Each guest gets a
+      # private ephemeral workspace on its own home volume instead, so no host
+      # directory is reachable from more than one VM.
       globalShares = [
         {
           host = ".agents";
           guest = ".agents";
-        }
-        {
-          host = "workspace";
-          guest = "workspace";
         }
       ];
       allShares = globalShares ++ (spec.persistentShares or [ ]);

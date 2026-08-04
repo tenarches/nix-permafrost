@@ -21,7 +21,6 @@ let
       ip = "192.168.33.10";
       mac = "02:00:00:00:00:10";
       vsockCid = 10;
-      workspacePath = "/run/agent-workspaces/claude";
       persistentShares = [
         {
           host = ".claude";
@@ -49,7 +48,6 @@ let
       ip = "192.168.33.13";
       mac = "02:00:00:00:00:13";
       vsockCid = 13;
-      workspacePath = "/run/agent-workspaces/opencode";
       persistentShares = [
         {
           host = ".config/opencode";
@@ -71,7 +69,6 @@ let
       ip = "192.168.33.14";
       mac = "02:00:00:00:00:14";
       vsockCid = 14;
-      workspacePath = "/run/agent-workspaces/pi";
       persistentShares = [
         {
           host = ".pi";
@@ -94,7 +91,6 @@ let
       ip = "192.168.33.16";
       mac = "02:00:00:00:00:16";
       vsockCid = 16;
-      workspacePath = "/run/agent-workspaces/bv";
       persistentShares = [
         # Pi auth — Gemini OAuth tokens (written by `pi /login`)
         {
@@ -176,7 +172,6 @@ let
       ip = "192.168.33.12";
       mac = "02:00:00:00:00:12";
       vsockCid = 12;
-      workspacePath = "/run/agent-workspaces/antigravity";
       gui = true;
       extraPackages = [ pkgs.antigravity-cli ];
     };
@@ -187,7 +182,6 @@ let
       ip = "192.168.33.15";
       mac = "02:00:00:00:00:15";
       vsockCid = 15;
-      workspacePath = "/run/agent-workspaces/crush";
       persistentShares = [
         {
           host = ".config/crush";

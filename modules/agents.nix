@@ -19,29 +19,24 @@ let
       nixpkgs.overlays = spec.overlays or [ ];
 
       microvm = {
-        shares = [
-          {
-            source = spec.workspacePath;
-            mountPoint = "/workspace";
-            tag = "workspace";
+        # No workspace share: each guest gets a private ephemeral workspace on its
+        # own home volume (see agent-base.nix), so no host directory is shared.
+        shares =
+          (lib.optionals (spec.gui or false) [
+            {
+              source = "/run/user/1000/wayland-0";
+              mountPoint = "/run/user/1000/wayland-0";
+              tag = "wayland";
+              proto = "virtiofs";
+            }
+          ])
+          ++ (map (s: {
+            source = "/mnt/persist/${s.guest}";
+            mountPoint = "/mnt/persist/${s.guest}";
+            # Hash the guest path to stay within the 36-char virtiofs tag limit
+            tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
             proto = "virtiofs";
-          }
-        ]
-        ++ (lib.optionals (spec.gui or false) [
-          {
-            source = "/run/user/1000/wayland-0";
-            mountPoint = "/run/user/1000/wayland-0";
-            tag = "wayland";
-            proto = "virtiofs";
-          }
-        ])
-        ++ (map (s: {
-          source = "/mnt/persist/${s.guest}";
-          mountPoint = "/mnt/persist/${s.guest}";
-          # Hash the guest path to stay within the 36-char virtiofs tag limit
-          tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
-          proto = "virtiofs";
-        }) (spec.persistentShares or [ ]));
+          }) (spec.persistentShares or [ ]));
 
         vsock.cid = spec.vsockCid;
         interfaces = [
