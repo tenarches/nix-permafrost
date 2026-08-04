@@ -366,8 +366,53 @@ let
     in
     runnerScript;
 
+  # Reclaim ephemeral image directories left behind by agents that are no longer in
+  # inventory.nix. ExecStopPost handles the normal case and preStart bounds live
+  # agents to one stale image set each, but a deleted agent's directory has nothing
+  # left to clean it — that is the only unbounded source of orphans.
+  gcScript = pkgs.writeShellScriptBin "permafrost-gc" ''
+    set -euo pipefail
+    ROOT="/var/lib/permafrost"
+
+    [ -d "$ROOT" ] || { echo "Nothing to collect: $ROOT does not exist."; exit 0; }
+
+    reclaimed=0
+    for dir in "$ROOT"/*; do
+      [ -d "$dir" ] || continue
+      name=$(${pkgs.coreutils}/bin/basename "$dir")
+      if systemctl is-active --quiet "microvm-$name"; then
+        echo "keep    $name (running)"
+        continue
+      fi
+      size=$(${pkgs.coreutils}/bin/du -sh --apparent-size "$dir" 2>/dev/null | ${pkgs.coreutils}/bin/cut -f1)
+      used=$(${pkgs.coreutils}/bin/du -sh "$dir" 2>/dev/null | ${pkgs.coreutils}/bin/cut -f1)
+      ${pkgs.coreutils}/bin/rm -rf "$dir"
+      echo "reclaim $name (apparent $size, on-disk $used)"
+      reclaimed=$((reclaimed + 1))
+    done
+    echo "Reclaimed $reclaimed directories."
+  '';
+
+  # Discovery: which agent owns which address, and what is actually running.
+  # machinectl is not usable here — microvm.nix's own runner.nix notes that NSS
+  # resolution works for containers but not VMs, so machined would list the VMs
+  # without their addresses. IPs are static in inventory.nix, so read them there.
+  statusScript = pkgs.writeShellScriptBin "permafrost-status" ''
+    set -euo pipefail
+    printf '%-13s %-16s %-5s %-18s %s\n' AGENT IP CID TAP STATE
+    ${lib.concatMapStringsSep "\n" (spec: ''
+      state=$(systemctl is-active "microvm-${spec.name}" 2>/dev/null || true)
+      printf '%-13s %-16s %-5s %-18s %s\n' \
+        "${spec.name}" "${spec.ip}" "${toString spec.vsockCid}" \
+        "microvm-${spec.tapId}" "$state"
+    '') (lib.attrValues vms)}
+  '';
+
 in
 {
+  status = statusScript;
+  gc = gcScript;
+
   claude = mkRunner vms.claude;
   opencode = mkRunner vms.opencode;
   pi = mkRunner vms.pi;
