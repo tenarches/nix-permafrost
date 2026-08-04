@@ -1,79 +1,30 @@
 {
+  "defaultThinkingLevel": "medium",
+  "thinkingBudgets": {
+    "minimal": 1024,
+    "low": 4096,
+    "medium": 10240,
+    "high": 32768
+  },
   "providers": {
-    "llama-cpp-local-bv": {
-      "name": "llama-cpp",
-      "baseUrl": "http://dualie.home.lan:8001/v1",
-      "apiKey": "not-required",
-      "api": "openai-completions",
-      "compat": {
-        "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
-      },
-      "models": [
-        {
-          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
-          "name": "Qwen 3.6 35B Verifier (64k)",
-          "contextWindow": 64000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        },
-        {
-          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
-          "name": "Qwen 3.6 35B Verifier (128k)",
-          "contextWindow": 128000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        }
-      ]
-    },
-    "llama-cpp-local": {
-      "name": "llama-cpp",
-      "baseUrl": "http://dualie.home.lan:8001/v1",
-      "apiKey": "not-required",
-      "api": "openai-completions",
-      "models": [
-        {
-          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
-          "name": "Qwen 3.6 35B Verifier (64k)",
-          "contextWindow": 64000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        },
-        {
-          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
-          "name": "Qwen 3.6 35B Verifier (128k)",
-          "contextWindow": 128000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        }
-      ]
-    },
-    "llama-cpp-local-2": {                                                                                                                              
-      "name": "llama-cpp-2",
+    "vllm-local": {                                                                                                                              
+      "name": "vllm",
       "baseUrl": "http://petunia.home.lan:8000/v1",
       "apiKey": "not-required",
       "api": "openai-completions",
       "models": [
         {
-          "id": "qwen3.6-27b-coding-agent-mtp-128k",
+          "id": "qwen3.6-27b",
           "name": "Qwen 3.6 27B (128k)",
           "contextWindow": 131072,
+          "maxTokens": 32000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
         {
-          "id": "qwen3.6-35b-a3b-coding-agent-mtp-128k",
+          "id": "qwen3.6-35b-a3b",
           "name": "Qwen 3.6 35B-A3B (128k)",
           "contextWindow": 131072,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        }
-      ]
-    },
-    "hermes-coding-agent": {
-      "name": "hermes-coding-agent",
-      "baseUrl": "http://hermes.home.lan:8643/v1",
-      "apiKey": "REDACTED-ROTATED-CREDENTIAL",
-      "api": "openai-completions",
-      "models": [
-        {
-          "id": "hermes-agent",
-          "name": "hermes-agent-with-tooling",
-          "contextWindow": 131072,
+          "maxTokens": 32000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
