@@ -46,10 +46,25 @@ let
                   (import ./overlays/python-mcp.nix)
                   inputs.mcp-servers-nix.overlays.default
                 ]
+                # microvm.cloud-hypervisor.package defaults to
+                # pkgs.cloud-hypervisor-graphics (Spectrum's fork, the only build
+                # that speaks vhost-user-gpu) once graphics are on, and that
+                # attribute exists only via microvm.nix's own overlay.
+                ++ (lib.optional (spec.gui or false) inputs.microvm.overlay)
                 ++ (spec.overlays or [ ]);
               };
               microvm = {
                 vsock.cid = spec.vsockCid;
+
+                # Host half of the GUI path: microvm.nix's cloud-hypervisor
+                # preStart launches `crosvm device gpu` against this socket and
+                # the invoking session's compositor. The upstream default is a
+                # *relative* path, resolved against the runner's cwd, so pin it
+                # into the unit's RuntimeDirectory.
+                graphics = lib.optionalAttrs (spec.gui or false) {
+                  enable = true;
+                  socket = "/run/microvm-${spec.name}/gpu.sock";
+                };
                 interfaces = [
                   {
                     type = "tap";
@@ -86,27 +101,12 @@ let
                       + (builtins.substring 0 30 (builtins.hashString "md5" s.guest))
                       + ".sock";
                   }) allShares)
-                  ++ (lib.optionals (spec.gui or false) [
-                    {
-                      source = "/run/user/1000";
-                      mountPoint = "/run/user/1000";
-                      tag = "wayland";
-                      proto = "virtiofs";
-                      socket = "/run/microvm-${spec.name}/wayland.sock";
-                    }
-                  ])
                 );
               };
 
-              environment.variables =
-                (lib.optionalAttrs (spec.gui or false) {
-                  WAYLAND_DISPLAY = "@@HOST_WAYLAND_DISPLAY@@"; # Replaced by runner script
-                  XDG_RUNTIME_DIR = "/run/user/1000";
-                  NIXOS_OZONE_WL = "1";
-                  LIBGL_ALWAYS_SOFTWARE = "1";
-                  WLR_RENDERER_ALLOW_SOFTWARE = "1";
-                })
-                // (spec.env or { });
+              # GUI env vars live in modules/graphics.nix, keyed off
+              # microvm.graphics.enable.
+              environment.variables = spec.env or { };
 
               # Match any virtio network interface
               systemd.network.networks."10-lan" = {
@@ -289,10 +289,6 @@ let
           # Start virtiofsd backends
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
           ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
-          
-          ${lib.optionalString (spec.gui or false) ''
-            ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/wayland.sock" --shared-dir "$HOST_XDG_RUNTIME_DIR" --sandbox namespace &
-          ''}
 
           ${lib.concatMapStringsSep "\n" (
             s:
@@ -319,10 +315,9 @@ let
           ) allShares}
 
           # Final VM Launch
-          # We patch the cmdline for Wayland and ensure all control sockets are in SOCKET_DIR
-          # The notify.vsock and nixos.sock are moved here to keep the project root pure.
+          # All control sockets are placed in SOCKET_DIR: the notify.vsock and
+          # nixos.sock are moved here to keep the project root pure.
           ${nixosConfig.config.microvm.declaredRunner}/bin/microvm-run \
-            --cmdline "wayland_display=$HOST_WAYLAND_DISPLAY " \
             --api-socket "$SOCKET_DIR/nixos.sock" \
             --vsock "cid=${toString spec.vsockCid},socket=$SOCKET_DIR/notify.vsock"
         '
@@ -344,6 +339,13 @@ let
           --property="Environment=REAL_HOME=$REAL_HOME"
           --property="Environment=HOST_XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR"
           --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
+          # microvm.nix's cloud-hypervisor preStart runs
+          #   crosvm device gpu --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY
+          # verbatim, so it needs those exact names, not the HOST_* copies. The
+          # unit runs as root, which can traverse the invoking user's 0700
+          # /run/user/<uid>.
+          --property="Environment=XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR"
+          --property="Environment=WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
           --property="Environment=SOCKET_DIR=$SOCKET_DIR"
           --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
           --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
