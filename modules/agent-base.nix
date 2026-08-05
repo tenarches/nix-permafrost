@@ -84,6 +84,7 @@ in
     inputs.stylix.nixosModules.stylix
     ./theme.nix
     ./agent-environment.nix
+    ./graphics.nix
   ];
   # Shared base module for all agent VMs
   microvm = {
@@ -283,24 +284,6 @@ in
       libXrandr
       libXi
     ];
-
-    # Helper to set WAYLAND_DISPLAY from kernel command line
-    loginShellInit = ''
-      if [[ -z "$WAYLAND_DISPLAY" || "$WAYLAND_DISPLAY" == "@@HOST_WAYLAND_DISPLAY@@" ]]; then
-        # Try to find it in /proc/cmdline (e.g. wayland_display=wayland-1)
-        PROBED_WL=$(cat /proc/cmdline | tr ' ' '\n' | grep '^wayland_display=' | cut -d= -f2 || true)
-        if [ -z "$PROBED_WL" ]; then
-          # Fallback to searching the mount point
-          PROBED_WL=$(ls /run/user/1000/wayland-* 2>/dev/null | head -n1 | xargs basename 2>/dev/null || true)
-        fi
-        if [ -n "$PROBED_WL" ]; then
-          export WAYLAND_DISPLAY="$PROBED_WL"
-        else
-          export WAYLAND_DISPLAY="wayland-0"
-        fi
-      fi
-    '';
-
   };
 
   # Enable autologin on the serial console for nix run ergonomics
