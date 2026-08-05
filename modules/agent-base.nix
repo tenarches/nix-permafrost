@@ -324,6 +324,7 @@ in
       imports = [
         inputs.nixvim.homeModules.nixvim
         ./programs/nixvim.nix
+        ./programs/bash.nix
       ];
     };
   };
