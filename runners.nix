@@ -169,6 +169,21 @@ let
           [ -S "$PROBED_SOCKET" ] && HOST_WAYLAND_DISPLAY=$(basename "$PROBED_SOCKET")
         fi
 
+        ${lib.optionalString (spec.gui or false) ''
+          # Fail fast rather than hang. microvm.nix's preStart backgrounds
+          #   crosvm device gpu --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY
+          # and then spins in `while ! [ -S gpu.sock ]`, so with no compositor to
+          # attach to crosvm exits and that loop never terminates.
+          if [ ! -S "$HOST_XDG_RUNTIME_DIR/$HOST_WAYLAND_DISPLAY" ]; then
+            echo "Error: ${spec.name} has gui = true but no Wayland compositor was found." >&2
+            echo "  Looked for: $HOST_XDG_RUNTIME_DIR/$HOST_WAYLAND_DISPLAY" >&2
+            echo "  Launch from a graphical session, and use 'sudo -E' so that" >&2
+            echo "  XDG_RUNTIME_DIR and WAYLAND_DISPLAY survive into the runner." >&2
+            echo "  For a headless host, set gui = false on this spec in modules/inventory.nix." >&2
+            exit 1
+          fi
+        ''}
+
         # 2. Lifecycle & Path Configuration
         # We use Systemd RuntimeDirectory for "pure" automatic cleanup of all sockets/pids
         RUNTIME_NAME="microvm-${spec.name}"

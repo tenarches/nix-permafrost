@@ -253,7 +253,8 @@ graph LR
 
 ## GUI Passthrough
 
-Agents with `gui = true` get `microvm.graphics.enable`. The transport is virtio-gpu,
+Every agent defaults to `gui = true` in `modules/inventory.nix` and so gets
+`microvm.graphics.enable`. The transport is virtio-gpu,
 not a shared socket: virtiofs exports an `AF_UNIX` socket as an inode but has no
 socket proxying, so a guest `connect()` on a shared Wayland socket can never reach
 the host listener.

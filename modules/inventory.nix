@@ -14,7 +14,15 @@ let
 
   sharedFiles = ../home-files/shared;
 
-  specs = {
+  # Every agent is GUI-capable by default: any of them may be asked to build a
+  # UI app that needs looking at. Set `gui = false` on a spec to opt out, which
+  # drops the wayland-proxy user service and the host-side crosvm GPU device.
+  #
+  # A GUI guest can only be launched from a session that has a Wayland
+  # compositor — see the preflight check in runners.nix.
+  specs = lib.mapAttrs (_: spec: { gui = true; } // spec) rawSpecs;
+
+  rawSpecs = {
     claude = {
       name = "claude";
       tapId = "claude";
@@ -172,7 +180,6 @@ let
       ip = "192.168.33.12";
       mac = "02:00:00:00:00:12";
       vsockCid = 12;
-      gui = true;
       extraPackages = [ pkgs.antigravity-cli ];
     };
 

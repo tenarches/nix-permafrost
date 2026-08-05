@@ -13,7 +13,7 @@ Agents are defined declaratively in `modules/inventory.nix`. Each spec declares 
 | **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration; `openclaude` compatibility. |
 | **`gemini`** | Google Specialist | `gemini-cli` | Standard interactive Gemini access. |
 | **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. |
-| **`antigravity`** | Web Browsing / GUI | Browser / GUI | Wayland passthrough; specialized for UI interaction. |
+| **`antigravity`** | Web Browsing / GUI | Browser / GUI | Specialized for UI interaction. (Wayland passthrough is on every agent — see GUI and Display.) |
 | **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. |
 
 ## Launching an Agent
@@ -277,13 +277,21 @@ Host 192.168.33.*
 
 ## GUI and Display
 
-Agents with `gui = true` in their inventory spec get `microvm.graphics.enable`. On the host, microvm.nix starts a `crosvm device gpu` process that connects to the invoking session's compositor and exposes it to the guest as a vhost-user virtio-gpu device; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service and offers a Wayland socket at `/run/user/1000/wayland-1`.
+**Every agent is GUI-capable by default** — any of them may be asked to build a UI app you need to look at. `modules/inventory.nix` defaults `gui = true` on all specs; set `gui = false` on one to opt out.
 
-**GUI guests are runner-only.** `nix run .#antigravity` works; the declarative `microvm.vms` path does not, because `microvm@<name>.service` is a system unit with no session compositor for crosvm to attach to. Launch from a graphical session with `sudo -E`, so `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` reach the runner:
+That gives each guest `microvm.graphics.enable`. On the host, microvm.nix starts a `crosvm device gpu` process that connects to the invoking session's compositor and exposes it to the guest as a vhost-user virtio-gpu device; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service and offers a Wayland socket at `/run/user/1000/wayland-1`.
+
+Only a Wayland compositor is required, and only on the host side. The `DISPLAY=:0` available inside a guest is Xwayland *in that guest*, so nothing needs X11 on the host.
+
+**GUI guests must be launched from a graphical session, via the runner.** Use `sudo -E`, so `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` reach it:
 
 ```bash
-sudo -E nix run .#antigravity
+sudo -E nix run .#claude
 ```
+
+The runner preflights for a compositor and exits with an explanation if there isn't one — without that check, microvm.nix's preStart backgrounds `crosvm device gpu` and then spins in `while ! [ -S gpu.sock ]`, which never terminates when crosvm has nothing to attach to. On a headless host, set `gui = false`.
+
+The declarative `microvm.vms` path cannot serve GUI guests at all, because `microvm@<name>.service` is a system unit with no session compositor.
 
 There are two ways to get that display over an SSH session. The virtio-gpu proxy is the primary one; waypipe is the fallback when it misbehaves.
 
@@ -328,7 +336,7 @@ Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for br
 
 ### 2. waypipe over SSH — launch through the tunnel
 
-`waypipe` is installed on the host (`modules/host.nix`) and on **every** guest (`modules/agent-base.nix`), not just the `gui = true` ones — it needs no virtio-gpu and no compositor in the guest, so it works against any agent, and against a GUI guest whose proxy is down:
+`waypipe` is installed on the host (`modules/host.nix`) and on every guest (`modules/agent-base.nix`), independent of `gui` — it needs no virtio-gpu and no compositor in the guest, so it still works against a guest that opted out with `gui = false`, or one whose proxy is down:
 
 ```bash
 waypipe ssh agent@192.168.33.12 <app>
@@ -347,7 +355,7 @@ Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here
 | | Native proxy | waypipe over SSH |
 | :--- | :--- | :--- |
 | Launch an app after logging in | Yes | Only inside a shell started by waypipe |
-| Needs `gui = true` on the spec | Yes | No — works against any agent |
+| Works with `gui = false` | No | Yes |
 | Needs a compositor in the launching session | Yes, at VM launch | Yes, at `waypipe ssh` time |
 | X11 clients | Yes, `DISPLAY=:0` | No |
 | Survives a restart of the guest-side proxy | n/a | Unaffected by it |
