@@ -78,6 +78,11 @@ in
   imports = [
     inputs.microvm.nixosModules.microvm
     inputs.home-manager.nixosModules.home-manager
+    # The NixOS stylix module is what injects stylix.targets.* into the Home
+    # Manager option tree below, so the HM-only targets (tmux, nixvim) are
+    # reachable without importing stylix.homeModules.stylix separately.
+    inputs.stylix.nixosModules.stylix
+    ./theme.nix
     ./agent-environment.nix
   ];
   # Shared base module for all agent VMs

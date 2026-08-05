@@ -15,6 +15,13 @@
       ];
     };
 
+    # stylix.autoEnable is off in theme.nix, so every target is opt-in. These
+    # two are the only ones that reach a headless terminal guest.
+    stylix.targets = {
+      tmux.enable = true;
+      nixvim.enable = true;
+    };
+
     programs.direnv = {
       enable = true;
       nix-direnv.enable = true;
