@@ -232,13 +232,9 @@ in
   # Enable passwordless sudo for the wheel group
   security.sudo.wheelNeedsPassword = false;
 
-  programs.tmux = {
-    enable = true;
-    extraConfig = ''
-      set -g extended-keys on
-      set -g extended-keys-format csi-u
-    '';
-  };
+  # tmux is configured entirely in Home Manager (agent-environment.nix) so that
+  # stylix, whose tmux target is HM-only, owns its colours. The binary stays in
+  # environment.systemPackages below for root.
 
   # Automatically symlink persistent mounts from /mnt/persist to home
   # This avoids the "empty directory" issue caused by mounting into a tmpfs
