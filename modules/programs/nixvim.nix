@@ -31,15 +31,24 @@ _:
 
     # Keymaps
     keymaps = [
+      # Split by mode: <C-r> is an insert/cmdline register-insert, so normal and
+      # visual mode need the "+p put instead.
       {
         mode = [
           "n"
           "v"
+        ];
+        key = "<RightMouse>";
+        action = ''"+p'';
+        options.desc = "Paste from system clipboard";
+      }
+      {
+        mode = [
           "i"
           "c"
         ];
         key = "<RightMouse>";
-        action = "<C-R>+";
+        action = "<C-r>+";
         options.desc = "Paste from system clipboard";
       }
       {
@@ -130,10 +139,8 @@ _:
       web-devicons.enable = true;
     };
 
-    # Colorscheme
-    colorschemes.nightfox = {
-      enable = true;
-      flavor = "carbonfox";
-    };
+    # No colorschemes.* here: stylix.targets.nixvim (see agent-environment.nix)
+    # generates the ayu-dark palette, and a colorscheme set here would load
+    # after it and win.
   };
 }
