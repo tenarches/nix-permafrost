@@ -49,11 +49,11 @@ Directories declared in `persistentShares` map host paths into the guest. These 
 Everything else the agent writes lands on per-VM disk images that are **wiped and recreated
 on every VM start**. Nothing here survives a restart, and nothing is shared between VMs.
 
-- **`~/workspace`**: A private 32 GiB working directory, backed by a btrfs volume with zstd
+- **`~/workspace`**: A private 50 GiB working directory, backed by a btrfs volume with zstd
   compression. It is **not** a share of the host's `~/workspace` — each VM gets its own.
 - **`/tmp`**: A 16 GiB volume. Nix builds lean on `TMPDIR` heavily, so it is kept off both
   the root filesystem and the home volume.
-- **`/nix/.rw-store`**: A 32 GiB volume holding the writable overlay above the host's
+- **`/nix/.rw-store`**: A 50 GiB volume holding the writable overlay above the host's
   read-only Nix store.
 - **swap**: 4 GiB, re-initialised each boot.
 

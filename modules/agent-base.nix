@@ -25,7 +25,7 @@ let
       mountPoint = "/nix/.rw-store";
       fsType = "ext4";
       label = "rw-store";
-      size = 32768;
+      size = 51200; # 50 GiB
       autoCreate = true;
     }
     {
@@ -37,7 +37,7 @@ let
       mountPoint = "/home/agent";
       fsType = "btrfs";
       label = "agent-home";
-      size = 32768;
+      size = 51200; # 50 GiB
       autoCreate = true;
     }
     {

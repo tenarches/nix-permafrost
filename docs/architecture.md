@@ -141,8 +141,8 @@ on every boot. Only `/` remains RAM-backed. All four volumes are declared in one
 
 | # | Image | Mount | Filesystem | Size | Device |
 |---|---|---|---|---|---|
-| 0 | `rw-store.img` | `/nix/.rw-store` | ext4 | 32 GiB | `/dev/vda` |
-| 1 | `home.img` | `/home/agent` | btrfs + `compress=zstd:1` | 32 GiB | `/dev/vdb` |
+| 0 | `rw-store.img` | `/nix/.rw-store` | ext4 | 50 GiB | `/dev/vda` |
+| 1 | `home.img` | `/home/agent` | btrfs + `compress=zstd:1` | 50 GiB | `/dev/vdb` |
 | 2 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
 | 3 | `swap.img` | *(raw)* | — | 4 GiB | `/dev/vdd` |
 
