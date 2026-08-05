@@ -46,6 +46,9 @@
   environment.systemPackages = with pkgs; [
     virtiofsd
     bridge-utils
+    # Fallback display transport for GUI guests when the virtio-gpu proxy
+    # misbehaves: `waypipe ssh agent@192.168.33.12 <app>`.
+    waypipe
   ];
 
   nix.settings = {

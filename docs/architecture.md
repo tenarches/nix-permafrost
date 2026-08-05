@@ -253,37 +253,50 @@ graph LR
 
 ## GUI Passthrough
 
-Agents with `gui = true` get the host's Wayland socket mounted into the guest via
-`virtiofs`. Rendering uses Mesa llvmpipe (software rasterisation). Sharing
-`/dev/dri` character devices through a virtiofsd namespace sandbox is incompatible
-with the seccomp allowlist required for namespace isolation, so hardware GPU is
-intentionally not exposed.
+Agents with `gui = true` get `microvm.graphics.enable`. The transport is virtio-gpu,
+not a shared socket: virtiofs exports an `AF_UNIX` socket as an inode but has no
+socket proxying, so a guest `connect()` on a shared Wayland socket can never reach
+the host listener.
+
+Instead, microvm.nix's cloud-hypervisor `preStart` runs `crosvm device gpu` on the
+host — itself an ordinary Wayland client of the invoking session's compositor —
+and hands the VM a vhost-user GPU device. In the guest, `wayland-proxy-virtwl`
+runs as a systemd **user** service, allocating buffers from `/dev/dri/renderD128`
+(provided by `virtio_gpu`, so no `/dev/dri` passthrough is needed) and serving
+`/run/user/1000/wayland-1`. Being a user service, it is reachable from any later
+session, which is what makes GUI-over-SSH work.
+
+This requires a live compositor in the launching session, so GUI guests only work
+through the JIT runners (`nix run .#antigravity`), never through the declarative
+`microvm.vms` path. Rendering is Mesa llvmpipe; no hardware GPU is exposed.
 
 ```mermaid
 graph LR
     subgraph HOST["Host"]
-        WL_SOCK["/run/user/1000/<br/>wayland-*"]
-    end
-
-    subgraph VFS["virtiofs"]
-        WL_VFS["wayland.sock<br/>(--sandbox namespace)"]
+        COMP["Compositor<br/>$WAYLAND_DISPLAY"]
+        CROSVM["crosvm device gpu<br/>(vhost-user, gpu.sock)"]
     end
 
     subgraph GUEST["GUI-enabled VM"]
-        G_WL["/run/user/1000/<br/>wayland-*"]
-        ENV["WAYLAND_DISPLAY<br/>XDG_RUNTIME_DIR<br/>NIXOS_OZONE_WL=1<br/>LIBGL_ALWAYS_SOFTWARE=1"]
+        VGPU["virtio_gpu<br/>/dev/dri/renderD128"]
+        PROXY["wayland-proxy-virtwl<br/>(systemd user service)"]
+        G_WL["/run/user/1000/<br/>wayland-1 + Xwayland :0"]
         ELECTRON["Electron App<br/>(Mesa llvmpipe)"]
+        SSH["ssh session"]
 
-        G_WL --> ELECTRON
-        ENV --> ELECTRON
+        VGPU --> PROXY --> G_WL --> ELECTRON
+        SSH --> ELECTRON
     end
 
-    WL_SOCK --> WL_VFS --> G_WL
+    COMP --> CROSVM --> VGPU
 
     style HOST fill:#0f3460,color:#fff
     style GUEST fill:#533483,color:#fff
     style ELECTRON fill:#06d6a0,color:#000,stroke-width:2px
 ```
+
+`waypipe` is installed on both sides as a fallback transport
+(`waypipe ssh agent@<ip> <app>`).
 
 ---
 
