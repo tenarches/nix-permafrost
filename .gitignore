@@ -5,6 +5,11 @@ result-*
 .nix-profile/
 .nix-defexpr/
 
+# devenv (devenv.nix/.yaml/.lock are tracked; these are per-checkout state)
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+
 # Lock files
 # flake.lock # Keep this if you want reproducible builds!
 

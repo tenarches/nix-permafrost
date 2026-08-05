@@ -102,6 +102,13 @@ Follow these on every task, every commit:
    All three hooks must pass: `nixfmt` (formatting, RFC 166 style), `deadnix`
    (unused bindings), `statix` (Nix anti-patterns).
 
+   This command is the authority for linting — do not substitute `devenv shell`
+   for it. `devenv.nix` at the repo root exists for interactive convenience
+   (devenv's native activation enters it on `cd`, after a one-time
+   `devenv allow`), and it deliberately declares no git hooks: the flake's
+   `pre-commit-hooks` module owns `.pre-commit-config.yaml`, which is a tracked
+   symlink into the store and would otherwise churn between the two shells.
+
 5. **Evaluate after committing:**
    ```bash
    nix flake check

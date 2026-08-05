@@ -1,0 +1,9 @@
+# Kept on the same channel as flake.nix's nixpkgs input, so the tools in this
+# shell and the tools nix flake check uses come from the same package set.
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixos-unstable
+
+# `devenv hook` and devenv.nix detection both landed in 2.2.
+require_version: ">=2.2"
+shell: bash
