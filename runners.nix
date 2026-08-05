@@ -118,10 +118,11 @@ let
                 matchConfig.Name = "en*";
                 address = [ "${spec.ip}/24" ];
                 gateway = [ "192.168.33.1" ];
+                # Internal resolvers only — see modules/agent-base.nix for why a
+                # public resolver must not appear alongside them.
                 dns = [
                   "10.0.7.15"
                   "10.0.7.16"
-                  "1.1.1.1"
                 ];
                 networkConfig.IPv6AcceptRA = false;
               };

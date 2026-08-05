@@ -188,10 +188,21 @@ in
   networking = {
     useDHCP = false;
     useNetworkd = true;
+    # Internal resolvers only, deliberately with no public fallback.
+    #
+    # networking.useNetworkd pulls in systemd-resolved, which treats every
+    # server in a scope as interchangeable — there is no per-server domain
+    # routing without splitting them across links. A public resolver listed
+    # here therefore gets asked for internal names too, and answers NXDOMAIN
+    # with the root zone's SOA, whose negative TTL is 86400s: one query that
+    # lands on it poisons the guest's cache for a day. nsswitch's
+    # `resolve [!UNAVAIL=return]` then returns that NOTFOUND without falling
+    # through, so only an explicit `dig @10.0.7.15` still works.
+    #
+    # These servers do full public recursion, so nothing is lost.
     nameservers = [
       "10.0.7.15"
       "10.0.7.16"
-      "1.1.1.1"
     ];
   };
 
