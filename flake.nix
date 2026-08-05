@@ -11,6 +11,21 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Pinned solely for `crosvm`, the host-side vhost-user GPU device behind
+    # microvm.graphics. It must speak the same vhost-user dialect as the
+    # Spectrum-patched cloud-hypervisor that microvm.nix pairs it with, and
+    # those two have diverged: the fork asks for GET_SHARED_MEMORY_REGIONS
+    # (message 1004, protocol bit 0x8000_0000), which crosvm has since replaced
+    # with the standardized SHMEM_MAP (bit 0x0020_0000). Current crosvm has no
+    # handler for 1004 and drops the connection, so the VM dies with
+    # VhostUserGetSharedMemoryRegions(Disconnected). 25.05's crosvm still
+    # implements the old message and bit — verified in
+    # third_party/vmm_vhost/src/message.rs.
+    #
+    # Deliberately NOT following nixpkgs: the point is the older tree.
+    # Remove once Spectrum's fork moves to SHMEM_MAP.
+    nixpkgs-crosvm.url = "github:NixOS/nixpkgs/nixos-25.05";
+
     # AI Coding Agents
     llm-agents = {
       url = "github:numtide/llm-agents.nix";

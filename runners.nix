@@ -69,6 +69,9 @@ let
                 graphics = lib.optionalAttrs (spec.gui or false) {
                   enable = true;
                   socket = "/run/microvm-${spec.name}/gpu.sock";
+                  # Pinned: must match the fork's vhost-user dialect. See the
+                  # nixpkgs-crosvm comment in flake.nix.
+                  crosvmPackage = inputs.nixpkgs-crosvm.legacyPackages.${system}.crosvm;
                 };
                 interfaces = [
                   {
