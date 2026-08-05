@@ -294,14 +294,18 @@ waypipe ssh agent@192.168.33.10 <app>
 The catch is that the app must be launched *through* waypipe from the host; sshing in first and running it there will not work, because waypipe's guest-side socket only exists for processes it started. To get the "log in and run several things" workflow anyway, start a shell through it — everything launched inside that shell inherits the right `WAYLAND_DISPLAY`:
 
 ```bash
-waypipe ssh agent@192.168.33.10 bash -l
+waypipe ssh -t agent@192.168.33.10 bash -l
 ```
+
+**The `-t` is required for a shell.** waypipe hands ssh a *command*, and ssh only allocates a pty when there is none — so without `-t` the shell starts with its stdin on a pipe, prints no prompt, and looks hung. Options before the destination are passed through to ssh verbatim. Launching an app directly needs no `-t`, since nothing wants a terminal.
+
+Inside that shell, `echo $WAYLAND_DISPLAY` should print something like `wayland-XXXXXXXX` — a one-second check that the tunnel is live.
 
 If the two ends disagree on version, pin both to one binary. The guest mounts the host's `/nix/store`, so any host store path also resolves inside the guest:
 
 ```bash
 W=$(readlink -f "$(command -v waypipe)")
-"$W" --remote-bin "$W" ssh agent@192.168.33.10 bash -l
+"$W" --remote-bin "$W" ssh -t agent@192.168.33.10 bash -l
 ```
 
 That same trick reaches a guest whose configuration predates `waypipe` being installed.
