@@ -48,9 +48,14 @@ let
                 ]
                 # microvm.cloud-hypervisor.package defaults to
                 # pkgs.cloud-hypervisor-graphics (Spectrum's fork, the only build
-                # that speaks vhost-user-gpu) once graphics are on, and that
-                # attribute exists only via microvm.nix's own overlay.
-                ++ (lib.optional (spec.gui or false) inputs.microvm.overlay)
+                # that speaks vhost-user-gpu) once graphics are on. That comes
+                # from microvm.nix's own overlay, which this wraps with the fixups
+                # it currently needs — see the comment in that file.
+                ++ (lib.optionals (spec.gui or false) (
+                  import ./overlays/cloud-hypervisor-graphics.nix {
+                    microvmOverlay = inputs.microvm.overlay;
+                  }
+                ))
                 ++ (spec.overlays or [ ]);
               };
               microvm = {
