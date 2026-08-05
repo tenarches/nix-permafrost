@@ -325,6 +325,9 @@ in
         inputs.nixvim.homeModules.nixvim
         ./programs/nixvim.nix
         ./programs/bash.nix
+        ./programs/ssh.nix
+        # Site-specific ssh drop-in; drop this line in a fork.
+        ./programs/ssh-novuscotia.nix
       ];
     };
   };
