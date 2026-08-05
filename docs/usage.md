@@ -277,85 +277,77 @@ Host 192.168.33.*
 
 ## GUI and Display
 
-**Every agent is GUI-capable by default** — any of them may be asked to build a UI app you need to look at. `modules/inventory.nix` defaults `gui = true` on all specs; set `gui = false` on one to opt out.
+**Every agent can put a window on your host compositor**, through waypipe — no per-spec flag, no virtio-gpu, no special hypervisor. That is the supported path, described in §1 below. Only a Wayland compositor is needed, and only on the host.
 
-That gives each guest `microvm.graphics.enable`. On the host, microvm.nix starts a `crosvm device gpu` process that connects to the invoking session's compositor and exposes it to the guest as a vhost-user virtio-gpu device; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service and offers a Wayland socket at `/run/user/1000/wayland-1`.
+A second path exists behind `gui = true` in `modules/inventory.nix`, **off by default**. It gives the guest `microvm.graphics.enable`: a host-side `crosvm device gpu` bridged to your compositor, plus `wayland-proxy-virtwl` as a systemd user service in the guest. It buys "ssh in first, then launch anything" and Xwayland for X11 clients — but it is upstream-fragile, needing three separate version pins to work at all (see §2). Turn it on per-spec if you want it.
 
-Only a Wayland compositor is required, and only on the host side. The `DISPLAY=:0` available inside a guest is Xwayland *in that guest*, so nothing needs X11 on the host.
+The toolkit environment — `NIXOS_OZONE_WL=1`, `LIBGL_ALWAYS_SOFTWARE=1`, `QT_QPA_PLATFORM`, `GDK_BACKEND`, `XDG_SESSION_TYPE` — is set on **every** guest in `modules/agent-base.nix`, independent of `gui`, because both paths need it. Without `NIXOS_OZONE_WL` an Electron build picks its X11 backend and dies on `Missing X server or $DISPLAY`. `WAYLAND_DISPLAY` is deliberately *not* set globally: waypipe exports its own for the process it launches.
 
-**GUI guests must be launched from a graphical session, via the runner.** Use `sudo -E`, so `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` reach it:
+### 1. waypipe over SSH — the default path
 
-```bash
-sudo -E nix run .#claude
-```
-
-The runner preflights for a compositor and exits with an explanation if there isn't one — without that check, microvm.nix's preStart backgrounds `crosvm device gpu` and then spins in `while ! [ -S gpu.sock ]`, which never terminates when crosvm has nothing to attach to. On a headless host, set `gui = false`.
-
-The declarative `microvm.vms` path cannot serve GUI guests at all, because `microvm@<name>.service` is a system unit with no session compositor.
-
-There are two ways to get that display over an SSH session. The virtio-gpu proxy is the primary one; waypipe is the fallback when it misbehaves.
-
-### 1. Native — SSH in, then run anything
-
-The proxy is a systemd *user* service, so its socket lives in `/run/user/1000` and is reachable from any session opened later, including one opened hours after boot. Nothing has to be arranged at connect time:
+`waypipe` is installed on the host (`modules/host.nix`) and on every guest (`modules/agent-base.nix`), independent of `gui`. It needs no virtio-gpu, no compositor in the guest, and no special hypervisor — only the binary on both ends, plus sshd:
 
 ```bash
-ssh agent@192.168.33.12
-NIXOS_OZONE_WL=1 <electron-app>
-```
-
-An interactive login shell already has the right environment — the variables below come from `/etc/set-environment`, which login shells source. For a non-login invocation (`ssh host <cmd>`, or anything run from a systemd user unit) export them yourself:
-
-```bash
-ssh agent@192.168.33.12 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1; <electron-app>'
-```
-
-X11 clients work too: the proxy runs with `--x-display=0`, so `DISPLAY=:0` reaches an Xwayland server inside the guest. No `X11Forwarding` in sshd, and no `ssh -X`, is involved.
-
-Quick checks when nothing appears:
-
-```bash
-# on the host, while the VM runs
-pgrep -af 'crosvm device gpu'          # the vhost-user GPU device must be up
-ss -lx | grep gpu.sock
-
-# in the guest
-systemctl --user status wayland-proxy
-ls -l /run/user/1000/wayland-1
-```
-
-Environment variables set automatically inside GUI-enabled guests (`modules/graphics.nix`):
-- `WAYLAND_DISPLAY=wayland-1` — the proxy's socket
-- `DISPLAY=:0` — Xwayland, served by the same proxy
-- `XDG_SESSION_TYPE`, `QT_QPA_PLATFORM`, `GDK_BACKEND`, `SDL_VIDEODRIVER`, `CLUTTER_BACKEND` — toolkit hints
-- `NIXOS_OZONE_WL=1` — enables Ozone/Wayland backend for Electron apps
-- `LIBGL_ALWAYS_SOFTWARE=1` — forces Mesa llvmpipe; skips hardware DRI probe
-- `WLR_RENDERER_ALLOW_SOFTWARE=1` — required for wlroots-based compositors
-
-Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for browser automation, headless Chromium, and Electron-based tools. Hardware GPU acceleration is intentionally not exposed.
-
-### 2. waypipe over SSH — launch through the tunnel
-
-`waypipe` is installed on the host (`modules/host.nix`) and on every guest (`modules/agent-base.nix`), independent of `gui` — it needs no virtio-gpu and no compositor in the guest, so it still works against a guest that opted out with `gui = false`, or one whose proxy is down:
-
-```bash
-waypipe ssh agent@192.168.33.12 <app>
+waypipe ssh agent@192.168.33.10 <app>
 ```
 
 The catch is that the app must be launched *through* waypipe from the host; sshing in first and running it there will not work, because waypipe's guest-side socket only exists for processes it started. To get the "log in and run several things" workflow anyway, start a shell through it — everything launched inside that shell inherits the right `WAYLAND_DISPLAY`:
 
 ```bash
-waypipe ssh agent@192.168.33.12 bash -l
+waypipe ssh agent@192.168.33.10 bash -l
 ```
+
+If the two ends disagree on version, pin both to one binary. The guest mounts the host's `/nix/store`, so any host store path also resolves inside the guest:
+
+```bash
+W=$(readlink -f "$(command -v waypipe)")
+"$W" --remote-bin "$W" ssh agent@192.168.33.10 bash -l
+```
+
+That same trick reaches a guest whose configuration predates `waypipe` being installed.
 
 Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here: cloud-hypervisor multiplexes guest vsock ports onto `<socket>_<port>` UNIX sockets on the host, so a host-side `waypipe --vsock` client cannot bind `AF_VSOCK` directly. Use the SSH transport above.
 
+Rendering is Mesa software rasterisation (llvmpipe) — enough for browser automation, headless Chromium, and Electron-based tools. No hardware GPU is exposed to guests.
+
+### 2. The in-guest proxy — opt in with `gui = true`
+
+Setting `gui = true` on a spec additionally enables `microvm.graphics`. On the host, microvm.nix starts a `crosvm device gpu` bridged to the invoking session's compositor; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service serving `/run/user/1000/wayland-1`. Because it is a user service, any session opened later can reach it:
+
+```bash
+sudo -E nix run .#claude      # -E: the runner needs XDG_RUNTIME_DIR and WAYLAND_DISPLAY
+ssh agent@192.168.33.10
+<electron-app>                # WAYLAND_DISPLAY=wayland-1 is already set
+```
+
+X11 clients work too: the proxy runs `--x-display=0`, so `DISPLAY=:0` reaches an Xwayland server *inside the guest*. Nothing needs X11 on the host, and sshd needs no `X11Forwarding`.
+
+The runner preflights for a compositor and exits with an explanation if there is none — without that check, microvm.nix's preStart backgrounds `crosvm device gpu` and then spins in `while ! [ -S gpu.sock ]`, which never terminates when crosvm has nothing to attach to. The declarative `microvm.vms` path cannot serve GUI guests at all, since `microvm@<name>.service` is a system unit with no session compositor.
+
+**Why this is off by default.** It rests on three version pins that upstream does not currently hold together:
+
+1. `cloud-hypervisor-graphics` comes from Spectrum's virtio-gpu patches, which apply only to cloud-hypervisor 51.0, while nixpkgs ships 53.0 (`overlays/cloud-hypervisor-graphics.nix`). Enabling `gui` therefore builds cloud-hypervisor from source.
+2. That fork requests `GET_SHARED_MEMORY_REGIONS` (message 1004, protocol bit `0x8000_0000`), which crosvm has since replaced with the standardized `SHMEM_MAP`. Hence the `nixpkgs-crosvm` pin in `flake.nix`; without it a guest dies at boot with `VhostUserGetSharedMemoryRegions(Disconnected)`.
+3. That older crosvm links against glibc 2.40 while the host's Mesa needs `GLIBC_ABI_GNU2_TLS`, so its Mesa loader is redirected to its own generation (`crosvmGraphics` in `runners.nix`). Without that, rutabaga falls back to a 2D backend and the guest reports `invalid capset id 4294967295` — no cross-domain context, so the proxy cannot work.
+
+Extra variables inside a `gui = true` guest (`modules/graphics.nix`): `WAYLAND_DISPLAY=wayland-1` and `DISPLAY=:0`. Diagnostics when nothing appears:
+
+```bash
+# host, while the VM runs
+pgrep -af 'crosvm device gpu'
+ss -lx | grep gpu.sock
+
+# guest
+systemctl --user status wayland-proxy
+ls -l /run/user/1000/wayland-1
+```
+
 ### Choosing between them
 
-| | Native proxy | waypipe over SSH |
+| | waypipe (default) | `gui = true` proxy |
 | :--- | :--- | :--- |
-| Launch an app after logging in | Yes | Only inside a shell started by waypipe |
-| Works with `gui = false` | No | Yes |
-| Needs a compositor in the launching session | Yes, at VM launch | Yes, at `waypipe ssh` time |
-| X11 clients | Yes, `DISPLAY=:0` | No |
-| Survives a restart of the guest-side proxy | n/a | Unaffected by it |
+| Launch an app after logging in | Only inside a shell started by waypipe | Yes |
+| Extra build cost | None | cloud-hypervisor 51.0 from source |
+| Version pins required | None | Three (see above) |
+| Needs a compositor in the launching session | At `waypipe ssh` time | At VM launch |
+| X11 clients in the guest | No | Yes, `DISPLAY=:0` |

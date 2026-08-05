@@ -298,7 +298,29 @@ in
       # `waypipe ssh agent@<ip> <app>` needs no virtio-gpu and no compositor in
       # the guest, only this binary on both ends.
       waypipe
+      xdg-utils
     ];
+
+    # Toolkit hints for any GUI app, set unconditionally because both display
+    # transports need them. Without NIXOS_OZONE_WL an Electron build falls back
+    # to the X11 ozone backend and dies on "Missing X server or $DISPLAY", even
+    # when a perfectly good Wayland socket is waiting for it.
+    #
+    # WAYLAND_DISPLAY and DISPLAY are deliberately absent: waypipe exports its
+    # own WAYLAND_DISPLAY for the process it launches, so a global one naming a
+    # socket that may not exist would break it. modules/graphics.nix adds them
+    # when the in-guest proxy is actually running.
+    variables = {
+      XDG_SESSION_TYPE = "wayland"; # Electron reads this
+      QT_QPA_PLATFORM = "wayland";
+      GDK_BACKEND = "wayland";
+      SDL_VIDEODRIVER = "wayland";
+      CLUTTER_BACKEND = "wayland";
+      NIXOS_OZONE_WL = "1";
+      # No GPU is passed through; rendering is Mesa llvmpipe either way.
+      LIBGL_ALWAYS_SOFTWARE = "1";
+      WLR_RENDERER_ALLOW_SOFTWARE = "1";
+    };
   };
 
   # Enable autologin on the serial console for nix run ergonomics

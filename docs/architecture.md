@@ -253,13 +253,18 @@ graph LR
 
 ## GUI Passthrough
 
-Every agent defaults to `gui = true` in `modules/inventory.nix` and so gets
-`microvm.graphics.enable`. The transport is virtio-gpu,
-not a shared socket: virtiofs exports an `AF_UNIX` socket as an inode but has no
-socket proxying, so a guest `connect()` on a shared Wayland socket can never reach
-the host listener.
+The default transport is **waypipe over SSH**, which involves none of the machinery
+below: `waypipe ssh agent@<ip> bash -l` proxies the Wayland protocol over the SSH
+connection, needing only the binary on both ends. It is installed on the host and
+on every guest.
 
-Instead, microvm.nix's cloud-hypervisor `preStart` runs `crosvm device gpu` on the
+What is *not* possible is sharing the host's Wayland socket over virtiofs: virtiofs
+exports an `AF_UNIX` socket as an inode but has no socket proxying, so a guest
+`connect()` on it can never reach the host listener.
+
+The second path, `gui = true` in `modules/inventory.nix` (off by default, see
+`docs/usage.md` for why), uses virtio-gpu. microvm.nix's cloud-hypervisor
+`preStart` runs `crosvm device gpu` on the
 host — itself an ordinary Wayland client of the invoking session's compositor —
 and hands the VM a vhost-user GPU device. In the guest, `wayland-proxy-virtwl`
 runs as a systemd **user** service, allocating buffers from `/dev/dri/renderD128`
@@ -268,7 +273,7 @@ runs as a systemd **user** service, allocating buffers from `/dev/dri/renderD128
 session, which is what makes GUI-over-SSH work.
 
 This requires a live compositor in the launching session, so GUI guests only work
-through the JIT runners (`nix run .#antigravity`), never through the declarative
+through the JIT runners (`nix run .#claude`), never through the declarative
 `microvm.vms` path. Rendering is Mesa llvmpipe; no hardware GPU is exposed.
 
 ```mermaid
@@ -296,8 +301,9 @@ graph LR
     style ELECTRON fill:#06d6a0,color:#000,stroke-width:2px
 ```
 
-`waypipe` is installed on both sides as a fallback transport
-(`waypipe ssh agent@<ip> <app>`).
+The diagram above is the opt-in `gui = true` path. The default is simpler: waypipe
+carries the Wayland protocol over the SSH connection itself, so no virtio-gpu,
+crosvm, or patched hypervisor is involved on either side.
 
 ---
 

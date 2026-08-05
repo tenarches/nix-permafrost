@@ -14,13 +14,19 @@ let
 
   sharedFiles = ../home-files/shared;
 
-  # Every agent is GUI-capable by default: any of them may be asked to build a
-  # UI app that needs looking at. Set `gui = false` on a spec to opt out, which
-  # drops the wayland-proxy user service and the host-side crosvm GPU device.
+  # Every agent can display GUI apps on the host, but through waypipe rather
+  # than `gui`: `waypipe ssh agent@<ip> bash -l` needs nothing from this flag.
   #
-  # A GUI guest can only be launched from a session that has a Wayland
-  # compositor — see the preflight check in runners.nix.
-  specs = lib.mapAttrs (_: spec: { gui = true; } // spec) rawSpecs;
+  # `gui = true` additionally enables microvm.graphics — the in-guest
+  # wayland-proxy plus a host-side crosvm virtio-gpu device — which buys you
+  # "ssh in first, then launch anything" and Xwayland for X11 clients. It is
+  # off by default because that path is upstream-fragile: it needs a
+  # Spectrum-patched cloud-hypervisor pinned to 51.0, a crosvm pinned to an
+  # older vhost-user dialect, and a Mesa kept on crosvm's own glibc generation
+  # (see flake.nix and runners.nix). Turning it on also means building
+  # cloud-hypervisor from source and having a live compositor in the launching
+  # session — see the preflight check in runners.nix.
+  specs = lib.mapAttrs (_: spec: { gui = false; } // spec) rawSpecs;
 
   rawSpecs = {
     claude = {

@@ -46,25 +46,19 @@ lib.mkIf config.microvm.graphics.enable {
     };
   };
 
-  # wayland-1 is wayland-proxy-virtwl's default socket name. These land in
-  # /etc/set-environment, which login shells source — so an interactive ssh
-  # session is already pointed at the proxy.
+  # Only the two variables that name the proxy's own sockets belong here.
+  # wayland-1 is wayland-proxy-virtwl's default socket name, and :0 comes from
+  # --x-display=0 above. Both land in /etc/set-environment, which login shells
+  # source, so an interactive ssh session is already pointed at the proxy.
+  #
+  # Everything else — the toolkit hints — lives in agent-base.nix, because
+  # waypipe needs them too and it works without this module. Setting
+  # WAYLAND_DISPLAY there would be actively wrong: waypipe exports its own for
+  # the process it launches, and a stale global pointing at a nonexistent
+  # wayland-1 would break it.
   environment.variables = {
     WAYLAND_DISPLAY = "wayland-1";
     DISPLAY = ":0";
-    XDG_SESSION_TYPE = "wayland"; # Electron reads this
-    QT_QPA_PLATFORM = "wayland";
-    GDK_BACKEND = "wayland";
-    SDL_VIDEODRIVER = "wayland";
-    CLUTTER_BACKEND = "wayland";
-    NIXOS_OZONE_WL = "1";
-    # No native GPU is passed through; rendering is llvmpipe and the proxy only
-    # moves the resulting buffers.
-    LIBGL_ALWAYS_SOFTWARE = "1";
-    WLR_RENDERER_ALLOW_SOFTWARE = "1";
   };
 
-  # waypipe, the fallback transport, is in agent-base.nix instead: it needs no
-  # virtio-gpu, so it is useful on guests that never set gui = true.
-  environment.systemPackages = [ pkgs.xdg-utils ];
 }
