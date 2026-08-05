@@ -237,23 +237,84 @@ The `bv` and `pi` agents have access to the **Model Context Protocol (MCP)** via
 - **Call a tool:** `npx mcporter call <server>.<tool> key:value`
 - **Config:** Managed declaratively in `~/.mcporter/mcporter.json`.
 
+## SSH Access
+
+Every guest runs `sshd` and is reachable from the host on its inventory IP:
+
+| Agent | Address |
+| :--- | :--- |
+| `claude` | `agent@192.168.33.10` |
+| `antigravity` | `agent@192.168.33.12` |
+| `opencode` | `agent@192.168.33.13` |
+| `pi` | `agent@192.168.33.14` |
+| `crush` | `agent@192.168.33.15` |
+| `bv` | `agent@192.168.33.16` |
+
+### Getting a key into the guest
+
+Guests accept keys only — `PasswordAuthentication` is off — and authorized keys are collected **at launch time**, not baked into the image. The runner writes them to a host directory that is virtiofs-mounted at `/etc/ssh/authorized_keys.d/` in the guest, for both `agent` and `root`. Two sources, and they combine:
+
+1. **Your SSH agent.** The runner shells out to `ssh-add -L`, so launch with `sudo -E` to keep `SSH_AUTH_SOCK`:
+   ```bash
+   sudo -E nix run .#claude
+   ```
+   If you forget `-E`, the runner probes `/run/user/$(id -u $SUDO_USER)` for an agent socket and prints what it found — but `-E` is the reliable path.
+2. **`AGENT_PUBKEYS`.** Any keys in that environment variable are appended, one per line. Use this when there is no agent to read:
+   ```bash
+   sudo AGENT_PUBKEYS="$(cat ~/.ssh/id_ed25519.pub)" nix run .#claude
+   ```
+
+Because the guests are ephemeral and their host keys are regenerated on every boot, expect a host-key mismatch on each relaunch. Add a stanza to your **host's** `~/.ssh/config`:
+
+```
+Host 192.168.33.*
+  User agent
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+```
+
+(That is the client config for reaching guests. The agent user's own outbound SSH config *inside* the guest is separate — see `modules/programs/ssh.nix`.)
+
+## GUI and Display
+
 Agents with `gui = true` in their inventory spec get `microvm.graphics.enable`. On the host, microvm.nix starts a `crosvm device gpu` process that connects to the invoking session's compositor and exposes it to the guest as a vhost-user virtio-gpu device; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service and offers a Wayland socket at `/run/user/1000/wayland-1`.
 
-Because the proxy is a user service rather than a socket handed in at boot, it is reachable from any later session — including one opened over SSH:
+**GUI guests are runner-only.** `nix run .#antigravity` works; the declarative `microvm.vms` path does not, because `microvm@<name>.service` is a system unit with no session compositor for crosvm to attach to. Launch from a graphical session with `sudo -E`, so `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` reach the runner:
+
+```bash
+sudo -E nix run .#antigravity
+```
+
+There are two ways to get that display over an SSH session. The virtio-gpu proxy is the primary one; waypipe is the fallback when it misbehaves.
+
+### 1. Native — SSH in, then run anything
+
+The proxy is a systemd *user* service, so its socket lives in `/run/user/1000` and is reachable from any session opened later, including one opened hours after boot. Nothing has to be arranged at connect time:
 
 ```bash
 ssh agent@192.168.33.12
-# An interactive login shell already has the variables below (they come from
-# /etc/set-environment). For non-login use — `ssh host <cmd>` — export them:
-export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1
 NIXOS_OZONE_WL=1 <electron-app>
+```
+
+An interactive login shell already has the right environment — the variables below come from `/etc/set-environment`, which login shells source. For a non-login invocation (`ssh host <cmd>`, or anything run from a systemd user unit) export them yourself:
+
+```bash
+ssh agent@192.168.33.12 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1; <electron-app>'
 ```
 
 X11 clients work too: the proxy runs with `--x-display=0`, so `DISPLAY=:0` reaches an Xwayland server inside the guest. No `X11Forwarding` in sshd, and no `ssh -X`, is involved.
 
-**GUI guests are runner-only.** `nix run .#antigravity` (via `sudo -E`, so `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` survive) works; the declarative `microvm.vms` path does not, because `microvm@<name>.service` is a system unit with no session compositor for crosvm to attach to.
+Quick checks when nothing appears:
 
-Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for browser automation, headless Chromium, and Electron-based tools. Hardware GPU acceleration is intentionally not exposed.
+```bash
+# on the host, while the VM runs
+pgrep -af 'crosvm device gpu'          # the vhost-user GPU device must be up
+ss -lx | grep gpu.sock
+
+# in the guest
+systemctl --user status wayland-proxy
+ls -l /run/user/1000/wayland-1
+```
 
 Environment variables set automatically inside GUI-enabled guests (`modules/graphics.nix`):
 - `WAYLAND_DISPLAY=wayland-1` — the proxy's socket
@@ -263,12 +324,30 @@ Environment variables set automatically inside GUI-enabled guests (`modules/grap
 - `LIBGL_ALWAYS_SOFTWARE=1` — forces Mesa llvmpipe; skips hardware DRI probe
 - `WLR_RENDERER_ALLOW_SOFTWARE=1` — required for wlroots-based compositors
 
-### Fallback: waypipe over SSH
+Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for browser automation, headless Chromium, and Electron-based tools. Hardware GPU acceleration is intentionally not exposed.
 
-If the virtio-gpu proxy misbehaves, `waypipe` is installed on both the host and the GUI guests:
+### 2. waypipe over SSH — launch through the tunnel
+
+`waypipe` is installed on the host (`modules/host.nix`) and on GUI guests (`modules/graphics.nix`, so today that still means `gui = true`; add `pkgs.waypipe` to a spec's `extraPackages` to use it elsewhere). The transport itself needs no virtio-gpu, so it works even when the guest-side proxy is down:
 
 ```bash
 waypipe ssh agent@192.168.33.12 <app>
 ```
 
-The app must be launched *through* waypipe from the host — sshing in first and running it there will not work. Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is not usable as-is here: cloud-hypervisor multiplexes guest vsock ports onto `<socket>_<port>` UNIX sockets on the host, so a host-side `waypipe --vsock` client cannot bind `AF_VSOCK` directly.
+The catch is that the app must be launched *through* waypipe from the host; sshing in first and running it there will not work, because waypipe's guest-side socket only exists for processes it started. To get the "log in and run several things" workflow anyway, start a shell through it — everything launched inside that shell inherits the right `WAYLAND_DISPLAY`:
+
+```bash
+waypipe ssh agent@192.168.33.12 bash -l
+```
+
+Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here: cloud-hypervisor multiplexes guest vsock ports onto `<socket>_<port>` UNIX sockets on the host, so a host-side `waypipe --vsock` client cannot bind `AF_VSOCK` directly. Use the SSH transport above.
+
+### Choosing between them
+
+| | Native proxy | waypipe over SSH |
+| :--- | :--- | :--- |
+| Launch an app after logging in | Yes | Only inside a shell started by waypipe |
+| Needs `gui = true` on the spec | Yes | Only for the preinstalled binary; the transport does not |
+| Needs a compositor in the launching session | Yes, at VM launch | Yes, at `waypipe ssh` time |
+| X11 clients | Yes, `DISPLAY=:0` | No |
+| Survives a restart of the guest-side proxy | n/a | Unaffected by it |
