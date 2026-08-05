@@ -23,9 +23,16 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Devenv 2.0 for native development environments
+    # Devenv 2.2 — native shell activation via `devenv hook`
     devenv = {
-      url = "github:cachix/devenv";
+      url = "github:cachix/devenv/v2.2.1";
+    };
+
+    # System-wide theming. Tracks master rather than a release branch, since
+    # this flake is on nixos-unstable.
+    stylix = {
+      url = "github:nix-community/stylix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     home-manager = {
