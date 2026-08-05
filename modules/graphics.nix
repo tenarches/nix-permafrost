@@ -64,9 +64,7 @@ lib.mkIf config.microvm.graphics.enable {
     WLR_RENDERER_ALLOW_SOFTWARE = "1";
   };
 
-  environment.systemPackages = with pkgs; [
-    xdg-utils
-    # Fallback transport: from a host terminal, `waypipe ssh agent@<ip> <app>`.
-    waypipe
-  ];
+  # waypipe, the fallback transport, is in agent-base.nix instead: it needs no
+  # virtio-gpu, so it is useful on guests that never set gui = true.
+  environment.systemPackages = [ pkgs.xdg-utils ];
 }

@@ -328,7 +328,7 @@ Rendering uses Mesa software rasterisation (llvmpipe). This is sufficient for br
 
 ### 2. waypipe over SSH — launch through the tunnel
 
-`waypipe` is installed on the host (`modules/host.nix`) and on GUI guests (`modules/graphics.nix`, so today that still means `gui = true`; add `pkgs.waypipe` to a spec's `extraPackages` to use it elsewhere). The transport itself needs no virtio-gpu, so it works even when the guest-side proxy is down:
+`waypipe` is installed on the host (`modules/host.nix`) and on **every** guest (`modules/agent-base.nix`), not just the `gui = true` ones — it needs no virtio-gpu and no compositor in the guest, so it works against any agent, and against a GUI guest whose proxy is down:
 
 ```bash
 waypipe ssh agent@192.168.33.12 <app>
@@ -347,7 +347,7 @@ Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here
 | | Native proxy | waypipe over SSH |
 | :--- | :--- | :--- |
 | Launch an app after logging in | Yes | Only inside a shell started by waypipe |
-| Needs `gui = true` on the spec | Yes | Only for the preinstalled binary; the transport does not |
+| Needs `gui = true` on the spec | Yes | No — works against any agent |
 | Needs a compositor in the launching session | Yes, at VM launch | Yes, at `waypipe ssh` time |
 | X11 clients | Yes, `DISPLAY=:0` | No |
 | Survives a restart of the guest-side proxy | n/a | Unaffected by it |

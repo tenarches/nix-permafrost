@@ -294,6 +294,10 @@ in
       libXcursor
       libXrandr
       libXi
+      # Display transport, on every guest rather than just the gui = true ones:
+      # `waypipe ssh agent@<ip> <app>` needs no virtio-gpu and no compositor in
+      # the guest, only this binary on both ends.
+      waypipe
     ];
   };
 
