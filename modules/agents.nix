@@ -21,22 +21,19 @@ let
       microvm = {
         # No workspace share: each guest gets a private ephemeral workspace on its
         # own home volume (see agent-base.nix), so no host directory is shared.
-        shares =
-          (lib.optionals (spec.gui or false) [
-            {
-              source = "/run/user/1000/wayland-0";
-              mountPoint = "/run/user/1000/wayland-0";
-              tag = "wayland";
-              proto = "virtiofs";
-            }
-          ])
-          ++ (map (s: {
-            source = "/mnt/persist/${s.guest}";
-            mountPoint = "/mnt/persist/${s.guest}";
-            # Hash the guest path to stay within the 36-char virtiofs tag limit
-            tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
-            proto = "virtiofs";
-          }) (spec.persistentShares or [ ]));
+        #
+        # spec.gui is deliberately ignored here. microvm.graphics on
+        # cloud-hypervisor needs a host-side `crosvm device gpu` pointed at a
+        # live compositor via $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY, and the host
+        # module's microvm@<name>.service is a system unit with neither. GUI
+        # guests are runner-only: `nix run .#antigravity`.
+        shares = map (s: {
+          source = "/mnt/persist/${s.guest}";
+          mountPoint = "/mnt/persist/${s.guest}";
+          # Hash the guest path to stay within the 36-char virtiofs tag limit
+          tag = "p_" + (builtins.substring 0 30 (builtins.hashString "md5" s.guest));
+          proto = "virtiofs";
+        }) (spec.persistentShares or [ ]);
 
         vsock.cid = spec.vsockCid;
         interfaces = [
@@ -48,15 +45,7 @@ let
         ];
       };
 
-      environment.variables =
-        (lib.optionalAttrs (spec.gui or false) {
-          WAYLAND_DISPLAY = "wayland-0";
-          XDG_RUNTIME_DIR = "/run/user/1000";
-          NIXOS_OZONE_WL = "1";
-          LIBGL_ALWAYS_SOFTWARE = "1";
-          WLR_RENDERER_ALLOW_SOFTWARE = "1";
-        })
-        // (spec.env or { });
+      environment.variables = spec.env or { };
 
       # microvm.credentialFiles = spec.credentials or {};
 
