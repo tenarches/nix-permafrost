@@ -323,6 +323,24 @@ in
     };
   };
 
+  # Agent VMs routinely fetch prebuilt binaries: language toolchains, LSP
+  # servers, and application "hosts" downloaded at first run. Those are foreign
+  # ELFs whose interpreter is /lib64/ld-linux-x86-64.so.2, a path NixOS does not
+  # have, so without nix-ld they fail at exec with a bare
+  # "No such file or directory" that says nothing about the real cause.
+  #
+  # libraries already defaults to a base set derived from the systemd and nix
+  # closures (glibc included); these three are the common additions for
+  # dynamically linked application binaries.
+  programs.nix-ld = {
+    enable = true;
+    libraries = with pkgs; [
+      stdenv.cc.cc.lib
+      zlib
+      openssl
+    ];
+  };
+
   # Enable autologin on the serial console for nix run ergonomics
   services.getty.autologinUser = "agent";
 
