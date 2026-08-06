@@ -288,13 +288,15 @@ The toolkit environment — `NIXOS_OZONE_WL=1`, `LIBGL_ALWAYS_SOFTWARE=1`, `QT_Q
 `waypipe` is installed on the host (`modules/host.nix`) and on every guest (`modules/agent-base.nix`), independent of `gui`. It needs no virtio-gpu, no compositor in the guest, and no special hypervisor — only the binary on both ends, plus sshd:
 
 ```bash
-waypipe ssh agent@192.168.33.10 <app>
+waypipe --no-gpu ssh agent@192.168.33.10 <app>
 ```
+
+`--no-gpu` hides the `wayland-drm` and `linux-dmabuf` globals from the guest. Guests have no render node, so any client that negotiates dmabuf buffers has nowhere to allocate them; blocking the globals pushes it onto `wl_shm`, which is waypipe's primary transport and the only one that can work here.
 
 The catch is that the app must be launched *through* waypipe from the host; sshing in first and running it there will not work, because waypipe's guest-side socket only exists for processes it started. To get the "log in and run several things" workflow anyway, start a shell through it — everything launched inside that shell inherits the right `WAYLAND_DISPLAY`:
 
 ```bash
-waypipe ssh -t agent@192.168.33.10 bash -l
+waypipe --no-gpu ssh -t agent@192.168.33.10 bash -l
 ```
 
 **The `-t` is required for a shell.** waypipe hands ssh a *command*, and ssh only allocates a pty when there is none — so without `-t` the shell starts with its stdin on a pipe, prints no prompt, and looks hung. Options before the destination are passed through to ssh verbatim. Launching an app directly needs no `-t`, since nothing wants a terminal.
@@ -305,7 +307,7 @@ If the two ends disagree on version, pin both to one binary. The guest mounts th
 
 ```bash
 W=$(readlink -f "$(command -v waypipe)")
-"$W" --remote-bin "$W" ssh -t agent@192.168.33.10 bash -l
+"$W" --remote-bin "$W" --no-gpu ssh -t agent@192.168.33.10 bash -l
 ```
 
 That same trick reaches a guest whose configuration predates `waypipe` being installed.
@@ -313,6 +315,39 @@ That same trick reaches a guest whose configuration predates `waypipe` being ins
 Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here: cloud-hypervisor multiplexes guest vsock ports onto `<socket>_<port>` UNIX sockets on the host, so a host-side `waypipe --vsock` client cannot bind `AF_VSOCK` directly. Use the SSH transport above.
 
 Rendering is Mesa software rasterisation (llvmpipe) — enough for browser automation, headless Chromium, and Electron-based tools. No hardware GPU is exposed to guests.
+
+#### Electron and Chromium apps need GPU flags
+
+Guests have no `/dev/dri`, and Chromium's Ozone/Wayland backend does not fall back gracefully. It looks up a DRM *render node* to build a GBM device and initialises EGL on that, so with no node the GPU process dies and viz restarts it in a loop:
+
+```
+drmGetDevices2() has not found any devices: No such file or directory (2)
+ANGLE Display::initialize error 12289: Failed to get system egl display
+Initialization of all (2) EGL display types failed
+Exiting GPU process due to errors during initialization
+```
+
+**No window is ever presented.** `LIBGL_ALWAYS_SOFTWARE=1` does not help: the failure happens before Mesa is consulted, because Chromium never asks it for a surfaceless display. Pass the flags to the app instead:
+
+```bash
+<electron-app> --ozone-platform=wayland --disable-gpu --disable-gpu-compositing --in-process-gpu
+```
+
+- `--disable-gpu` — the one that matters. Chromium stops attempting EGL and composites on the CPU, where Skia's own raster backend is *faster* than SwiftShader anyway.
+- `--disable-gpu-compositing` — belt and braces; forces viz to the software output device, which emits `wl_shm` buffers, exactly what waypipe carries best.
+- `--in-process-gpu` — optional, removes the separate GPU process so there is nothing left to crash-loop.
+- `--ozone-platform=wayland` **explicitly**, not just the hint: Electron's zygote-forked GPU child does not inherit `--ozone-platform` from the browser process (electron/electron#50455, #50462).
+
+Two traps:
+
+- **Never pass `--disable-software-rasterizer`.** It removes the last remaining renderer and converts a slow window into a blank one.
+- `--use-gl=swiftshader` is a removed spelling. If the app genuinely needs WebGL, it is `--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader` — slower than plain `--disable-gpu`, so only reach for it when WebGL is required.
+
+These cannot be set globally from the guest configuration: Chromium reads no generic "extra flags" environment variable, and `NIXOS_OZONE_WL` is a nixpkgs *wrapper* convention rather than something Chromium itself honours. They have to reach the app's argv.
+
+#### Running downloaded binaries
+
+`programs.nix-ld` is enabled on every guest (`modules/agent-base.nix`). Agents frequently fetch prebuilt binaries — toolchains, LSP servers, application "hosts" downloaded at first run — and those are foreign ELFs asking for `/lib64/ld-linux-x86-64.so.2`, which NixOS does not otherwise provide. Without nix-ld they fail at exec with a bare `No such file or directory` that names the binary rather than the missing interpreter. If such a binary still fails on a missing `.so`, add the library to `programs.nix-ld.libraries`.
 
 ### 2. The in-guest proxy — opt in with `gui = true`
 

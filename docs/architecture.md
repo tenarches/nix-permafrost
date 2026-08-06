@@ -254,7 +254,7 @@ graph LR
 ## GUI Passthrough
 
 The default transport is **waypipe over SSH**, which involves none of the machinery
-below: `waypipe ssh agent@<ip> bash -l` proxies the Wayland protocol over the SSH
+below: `waypipe --no-gpu ssh -t agent@<ip> bash -l` proxies the Wayland protocol over the SSH
 connection, needing only the binary on both ends. It is installed on the host and
 on every guest.
 

@@ -47,7 +47,7 @@
     virtiofsd
     bridge-utils
     # Fallback display transport for GUI guests when the virtio-gpu proxy
-    # misbehaves: `waypipe ssh agent@192.168.33.12 <app>`.
+    # misbehaves: `waypipe --no-gpu ssh agent@192.168.33.10 <app>`.
     waypipe
   ];
 
