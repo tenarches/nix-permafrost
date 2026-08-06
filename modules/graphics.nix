@@ -26,6 +26,18 @@ lib.mkIf config.microvm.graphics.enable {
   # own graphics module.
   hardware.graphics.enable = true;
 
+  # Adding a user service means user@1000.service now starts during boot rather
+  # than on first login (linger-users.service is enabled), which puts it in the
+  # same startup transaction as Home Manager activation. HM's reloadSystemd step
+  # talks to the user bus when it finds one, so without this ordering it can
+  # reach a bus that is still coming up and fail the unit. With gui = false
+  # there is no user service, HM logs "User systemd daemon not running.
+  # Skipping reload." and the ordering never applies.
+  #
+  # After only — deliberately not Wants: order against the user manager if it is
+  # already part of the transaction, never pull it in.
+  systemd.services.home-manager-agent.after = [ "user@1000.service" ];
+
   # A *user* service, so its socket lands in /run/user/1000 and is reachable by
   # anything the agent runs later — including a shell opened over ssh long after
   # boot. pam_systemd starts user@1000.service on ssh login, which pulls this in.
