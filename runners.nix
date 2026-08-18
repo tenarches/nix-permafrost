@@ -254,14 +254,38 @@ let
         chmod 755 "$SSH_KEYS_DIR"
 
         if [ -n "$SUDO_USER" ] && [ -z "$SSH_AUTH_SOCK" ]; then
-          # Try to find the user's agent if they forgot sudo -E
-          USER_ID=$(id -u "$SUDO_USER")
-          PROBED_SOCK=$(find "/run/user/$USER_ID" -name "ssh" -o -name "agent.*" 2>/dev/null | head -n1)
-          if [ -n "$PROBED_SOCK" ]; then
-            export SSH_AUTH_SOCK="$PROBED_SOCK"
-            echo "Auto-detected SSH agent for $SUDO_USER at $SSH_AUTH_SOCK"
-          fi
+          # Try to find the user's agent if they forgot sudo -E. The list is
+          # ordered by preference and matched exactly rather than by glob:
+          # permafrost-agent.sock sits in the same directory and holds the
+          # agentic key, so a wildcard could enrol that key for interactive
+          # login — and for root — inverting the isolation the two-agent split
+          # exists to provide. Only the personal agent belongs here.
+          USER_RUNTIME_DIR="/run/user/$(id -u "$SUDO_USER")"
+          for CANDIDATE in \
+            ssh-tpm-agent.sock \
+            gnupg/S.gpg-agent.ssh \
+            ssh-agent.socket \
+            keyring/ssh; do
+            if [ -S "$USER_RUNTIME_DIR/$CANDIDATE" ]; then
+              export SSH_AUTH_SOCK="$USER_RUNTIME_DIR/$CANDIDATE"
+              echo "Auto-detected SSH agent for $SUDO_USER at $SSH_AUTH_SOCK"
+              break
+            fi
+          done
         fi
+
+        # Whichever agent we ended up with — probed or inherited through
+        # sudo -E — decides who can log in, because authorized_keys is just
+        # its public halves. The permafrost agent holds only the agentic key,
+        # which is not enrolled for interactive login.
+        case "$SSH_AUTH_SOCK" in
+          */permafrost-agent.sock)
+            echo "Warning: SSH_AUTH_SOCK points at the permafrost agent." >&2
+            echo "  Only the agentic key will be enrolled in authorized_keys, so your" >&2
+            echo "  interactive login will likely be rejected. Launch from a session on" >&2
+            echo "  the personal agent (ssh-tpm-agent.sock) instead." >&2
+            ;;
+        esac
 
         # Extract keys for both agent and root
         if [ -n "$SSH_AUTH_SOCK" ]; then
