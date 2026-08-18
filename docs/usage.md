@@ -259,6 +259,8 @@ Guests accept keys only — `PasswordAuthentication` is off — and authorized k
    sudo -E nix run .#claude
    ```
    If you forget `-E`, the runner probes `/run/user/$(id -u $SUDO_USER)` for an agent socket and prints what it found — but `-E` is the reliable path.
+
+   **Which agent you launch from decides who can log in.** Hosts running TPM-sealed keys keep two separate agents: the personal one at `ssh-tpm-agent.sock`, and a permafrost one at `permafrost-agent.sock` holding only the agentic key. Launch from a session on the **personal** agent — that is the key you interactively log in with. The probe above only ever selects the personal agent, and the runner warns if `SSH_AUTH_SOCK` was inherited pointing at the permafrost one, because that enrols the agentic key instead and your login will be rejected.
 2. **`AGENT_PUBKEYS`.** Any keys in that environment variable are appended, one per line. Use this when there is no agent to read:
    ```bash
    sudo AGENT_PUBKEYS="$(cat ~/.ssh/id_ed25519.pub)" nix run .#claude
@@ -274,6 +276,20 @@ Host 192.168.33.*
 ```
 
 (That is the client config for reaching guests. The agent user's own outbound SSH config *inside* the guest is separate — see `modules/programs/ssh.nix`.)
+
+### The forwarded agent, and what a guest may reach with it
+
+A guest holds no private key of its own. Outbound SSH — `git push`, Gitea — works off the agent socket forwarded in over your login, and on a TPM host that socket is `permafrost-agent.sock`, which carries the agentic key and nothing else. The isolation contract is that a guest never sees the personal key. Check it from the host:
+
+```bash
+ssh agent@192.168.33.10 ssh-add -l
+```
+
+Exactly one key, the agentic one. If the personal key appears, the forwarding is scoped wrong on the **host** side — fix that before trusting the sandbox, because a guest that can use your personal key can use it against anything that key opens.
+
+If no key appears at all, the forwarding block on the host most likely did not match the address you connected to. `ssh -G <address>` prints the effective config, including `forwardagent`, without connecting or touching any key file.
+
+> **Do not add `IdentitiesOnly yes`** to `modules/programs/ssh.nix` or to a drop-in without also setting `IdentityFile` to the **public** key. With no `IdentityFile`, `IdentitiesOnly` suppresses agent identities outright — the agent is offered nothing, and a working setup looks convincingly broken.
 
 ## GUI and Display
 
