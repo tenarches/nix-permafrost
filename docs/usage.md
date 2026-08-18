@@ -268,24 +268,18 @@ Guests accept keys only — `PasswordAuthentication` is off — and authorized k
 
 ### Host-side client config
 
-The host needs a matching block to reach guests: they take a fixed login user, they present a new host key on every boot, and the agent has to be forwarded in. That block is generated from `modules/inventory.nix`, so it cannot drift from the agents it describes:
+The host needs a matching block to reach guests: they take a fixed login user, they present a new host key on every boot, and the agent has to be forwarded in. **You do not have to write it.** Launching any agent writes `~/.ssh/config.d/13-permafrost.conf` from `modules/inventory.nix`, so the config for reaching a guest is created by the act of starting it and cannot drift from the inventory. The runner says so when the file changes, and stays quiet when it does not.
 
-```bash
-nix run .#ssh-config > ~/.ssh/config.d/13-permafrost.conf
-```
+It writes one catch-all block covering the whole `192.168.33.0/24` subnet plus a `permafrost-<name>` alias per agent, so `ssh agent@192.168.33.10` and `ssh permafrost-claude` behave identically. Adding an agent to the inventory changes only the aliases — the catch-all is built from what is structural about permafrost. The forwarded socket path is resolved against the launching user's own runtime directory, so nothing depends on a hardcoded uid or an exported variable.
 
-It emits one catch-all block covering the whole `192.168.33.0/24` subnet plus a `permafrost-<name>` alias per agent, so `ssh agent@192.168.33.10` and `ssh permafrost-claude` behave identically. Only the aliases change when you add an agent — the catch-all is built from what is structural about permafrost and needs no regeneration. To check for drift:
+Two things worth knowing:
 
-```bash
-nix run .#ssh-config | diff - ~/.ssh/config.d/13-permafrost.conf
-```
-
-Two things it depends on:
-
-- **`PERMAFROST_AGENT_SOCK` must be exported** in the session you run `ssh` from, holding the path of the permafrost agent socket. Unset, agent forwarding simply does not happen — and `ssh -G` will not reveal it, because the config carries the variable *name* and only resolves it at connect time. `ssh-add -l` inside a guest is the real check.
-- **The fragment must be included ahead of your global `Host *` block.** ssh keeps the first value it obtains for each keyword, so a global `ForwardAgent no` below the include is correctly overridden; below the include it is not.
+- **A file you wrote yourself is never clobbered.** The first launch moves an unmanaged `13-permafrost.conf` aside to `13-permafrost.conf.bak` and says so. If you later hand-edit the managed file and a `.bak` already exists, the runner leaves both alone and warns rather than discarding the edit.
+- **The fragment must be included ahead of your global `Host *` block.** ssh keeps the first value it obtains for each keyword, so a global `ForwardAgent no` is correctly overridden only when the `Include` sits above it.
 
 The relaxations are deliberately scoped to the subnet and aliases, so `StrictHostKeyChecking no` and `UserKnownHostsFile /dev/null` never apply to anything else you ssh to.
+
+To see what would be written without launching anything, `nix run .#ssh-config`.
 
 (That is the client config for reaching guests. The agent user's own outbound SSH config *inside* the guest is separate — see `modules/programs/ssh.nix`.)
 
@@ -299,7 +293,7 @@ ssh agent@192.168.33.10 ssh-add -l
 
 Exactly one key, the agentic one. If the personal key appears, the forwarding is scoped wrong on the **host** side — fix that before trusting the sandbox, because a guest that can use your personal key can use it against anything that key opens.
 
-If no key appears at all, either the forwarding block did not match the address you connected to, or `PERMAFROST_AGENT_SOCK` was not set in the session you ran `ssh` from. `ssh -G <address>` settles the first — it prints the effective config without connecting or touching any key file — but not the second, since it reports the variable name unresolved.
+If no key appears at all, the forwarding block did not match the address you connected to. `ssh -G <address>` settles it: the `forwardagent` line prints the resolved socket path, and the whole check runs without connecting or touching any key file.
 
 > **Do not add `IdentitiesOnly yes`** to `modules/programs/ssh.nix` or to a drop-in without also setting `IdentityFile` to the **public** key. With no `IdentityFile`, `IdentitiesOnly` suppresses agent identities outright — the agent is offered nothing, and a working setup looks convincingly broken.
 
