@@ -8,5 +8,6 @@ _:
     Host code-ssh.novuscotia.com
       Port 2222
       Hostname gitea-ssh.service.consul
+      User git
   '';
 }
