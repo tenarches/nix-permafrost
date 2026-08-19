@@ -85,6 +85,8 @@ in
     ./theme.nix
     ./agent-environment.nix
     ./graphics.nix
+    # Site-specific host-path compatibility; drop this line in a fork.
+    ./home-compat.nix
   ];
   # Shared base module for all agent VMs
   microvm = {
