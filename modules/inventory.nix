@@ -3,6 +3,8 @@
 let
   inherit (pkgs) lib;
 
+  models = import ./models.nix { inherit pkgs lib; };
+
   openclaude = pkgs.callPackage ./programs/openclaude.nix { };
   mcpServers = [
     pkgs.context7-mcp
@@ -11,8 +13,6 @@ let
     pkgs.terraform-mcp-server
     pkgs.mcp-nixos
   ];
-
-  sharedFiles = ../home-files/shared;
 
   # Every agent can display GUI apps on the host, but through waypipe rather
   # than `gui`: `waypipe ssh agent@<ip> bash -l` needs nothing from this flag.
@@ -95,7 +95,7 @@ let
       ]
       ++ mcpServers;
       homeFiles = {
-        ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
+        ".pi/agent/models.json".source = models.piModelsJson;
       };
     };
 
@@ -146,18 +146,18 @@ let
         in
         {
           ".mcporter/mcporter.json".source = bvFiles + "/.mcporter/mcporter.json";
-          ".pi/agent/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".pi/agent/models.json".source = models.piModelsJson;
           ".bv-logic/notify.json".source = bvFiles + "/bv/notify.json";
           # Builder agent dir — Pi reads PI_CODING_AGENT_DIR to find these
           ".bv-logic/builder/AGENTS.md".source = bvFiles + "/bv/builder/AGENTS.md";
-          ".bv-logic/builder/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".bv-logic/builder/models.json".source = models.piModelsJson;
           ".bv-logic/builder/extensions/bash-lockdown.ts".source =
             bvFiles + "/bv/builder/extensions/bash-lockdown.ts";
           ".bv-logic/builder/skills/prime.md".source = bvFiles + "/bv/builder/skills/prime.md";
           ".bv-logic/builder/skills/mcporter.md".source = bvFiles + "/bv/builder/skills/mcporter.md";
           # Verifier agent dir
           ".bv-logic/verifier/AGENTS.md".source = bvFiles + "/bv/verifier/AGENTS.md";
-          ".bv-logic/verifier/models.json".source = sharedFiles + "/.pi/agent/models.json";
+          ".bv-logic/verifier/models.json".source = models.piModelsJson;
           ".bv-logic/verifier/extensions/verifier-provider.ts".source =
             bvFiles + "/bv/verifier/extensions/verifier-provider.ts";
           ".bv-logic/verifier/extensions/readonly-enforcer.ts".source =
