@@ -144,7 +144,7 @@ on every boot. Only `/` remains RAM-backed. All four volumes are declared in one
 | 0 | `rw-store.img` | `/nix/.rw-store` | ext4 | 50 GiB | `/dev/vda` |
 | 1 | `home.img` | `/home/agent` | btrfs + `compress=zstd:1` | 50 GiB | `/dev/vdb` |
 | 2 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
-| 3 | `swap.img` | *(raw)* | — | 4 GiB | `/dev/vdd` |
+| 3 | `swap.img` | *(raw)* | — | 8 GiB | `/dev/vdd` |
 
 `storeOnDisk` is `false` (the Nix store is a virtiofs share), so `withDriveLetters` applies
 no offset and letters follow list order. The swap letter is **derived** via microvm.nix's own
@@ -170,10 +170,10 @@ fine; only the upperdir was misplaced.
 - `/tmp` is **separate** so root- and agent-owned temp files do not collide on a 0700 home,
   and so a runaway build fills `/tmp` rather than the workspace.
 
-**Swap avoids a 4 GiB per-boot write.** `createVolumesScript` has no `swap` fsType, so the
+**Swap avoids an 8 GiB per-boot write.** `createVolumesScript` has no `swap` fsType, so the
 volume is `autoCreate = false` and `microvm.preStart` creates it with `truncate` and writes
 the header with `mkswap` **host-side**. `swapDevices[].size` is deliberately never set: on a
-non-btrfs filesystem, `nixos/modules/config/swap.nix` would `dd if=/dev/zero` the whole 4 GiB
+non-btrfs filesystem, `nixos/modules/config/swap.nix` would `dd if=/dev/zero` the whole 8 GiB
 through virtio-blk on every boot. `randomEncryption` was considered and rejected — it was
 only ever a way to reach `mkswap` without that `dd`, and it drags in a `dm_crypt` dependency.
 

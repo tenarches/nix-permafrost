@@ -228,12 +228,12 @@ size caps and `nix run` failed with ENOSPC long before any declared limit.
 | `rw-store.img` | `/nix/.rw-store` | ext4 | 32 GiB | `/dev/vda` |
 | `home.img` | `/home/agent` | btrfs + zstd | 32 GiB | `/dev/vdb` |
 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
-| `swap.img` | *(raw swap)* | — | 4 GiB | `/dev/vdd` |
+| `swap.img` | *(raw swap)* | — | 8 GiB | `/dev/vdd` |
 
 Images live at `/var/lib/permafrost/<agent>/` and are sparse, so a booted VM occupies well
 under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot: `mkfs` on
 a sparse image is 27–52 ms, and swap is initialised by writing only a header host-side
-(`mkswap`, ~7 ms) rather than `dd`-ing 4 GiB through virtio-blk on every boot.
+(`mkswap`, ~7 ms) rather than `dd`-ing 8 GiB through virtio-blk on every boot.
 
 ```mermaid
 graph TD
@@ -263,7 +263,7 @@ graph TD
         end
 
         TMPV["/tmp<br/>(ext4 volume, ephemeral)"]
-        SWAP["swap<br/>(raw volume, 4 GiB)"]
+        SWAP["swap<br/>(raw volume, 8 GiB)"]
         PERSIST["/mnt/persist/*<br/>virtiofs mount points"]
     end
 

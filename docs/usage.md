@@ -55,7 +55,7 @@ on every VM start**. Nothing here survives a restart, and nothing is shared betw
   the root filesystem and the home volume.
 - **`/nix/.rw-store`**: A 50 GiB volume holding the writable overlay above the host's
   read-only Nix store.
-- **swap**: 4 GiB, re-initialised each boot.
+- **swap**: 8 GiB, re-initialised each boot.
 
 > **If you need something to survive a restart, put it in `~/.agents` or add a
 > `persistentShares` entry in `modules/inventory.nix`.** Work left in `~/workspace` is lost.
