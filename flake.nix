@@ -32,6 +32,19 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Curated Agent Skills — a directory per skill, each with a SKILL.md whose
+    # YAML frontmatter carries `name` and `description`. Harnesses that support
+    # the format discover them by scanning a directory, so this is plain content
+    # rather than a flake.
+    #
+    # Site-specific and private: evaluating this flake needs ssh to the gitea
+    # behind code-ssh.novuscotia.com. Drop the input and the skills copy in
+    # modules/dsh.nix in a fork.
+    agent-skills = {
+      url = "git+ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git?ref=main";
+      flake = false;
+    };
+
     # MCP Server Framework
     mcp-servers-nix = {
       url = "github:natsukium/mcp-servers-nix";

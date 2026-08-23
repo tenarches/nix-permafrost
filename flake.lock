@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "agent-skills": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786989878,
+        "narHash": "sha256-SLl1WWu6zerq6JgDZOOLMNIirJ9U8l499wpxRVlLbAQ=",
+        "ref": "main",
+        "rev": "edf5aa6896829f5743f2f11be657fe444b3968ba",
+        "revCount": 4,
+        "type": "git",
+        "url": "ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git"
+      }
+    },
     "base16": {
       "inputs": {
         "fromYaml": "fromYaml"
@@ -736,6 +753,7 @@
     },
     "root": {
       "inputs": {
+        "agent-skills": "agent-skills",
         "devenv": "devenv",
         "flake-parts": "flake-parts_2",
         "home-manager": "home-manager",
