@@ -325,7 +325,7 @@ graph TD
     end
 
     subgraph HOST["Inference Host (dualie)"]
-        LLAMA["llama-server<br/>(:8001)"]
+        LLAMA["inference server<br/>(:8000)"]
     end
 
     ORCH -->|drive| BUILDER
@@ -353,7 +353,7 @@ The orchestrator enforces a strict state machine to ensure quality and security:
 - **Declarative Orchestration:** The entire orchestrator, agent instructions, and security extensions are managed declaratively via Nix. This ensures that the agent's "personality" and reasoning logic are versioned alongside the code.
 - **Bash Lockdown:** The builder operates under a strict command allowlist (`bash-lockdown.ts`) to prevent unauthorized system modifications.
 - **Read-Only Verification:** The verifier is architecturally restricted from modifying files or executing bash, ensuring its audit is strictly analytical.
-- **Local Inference:** The Verifier uses a local llama.cpp endpoint (`petunia.home.lan:8001`) for data residency and specialized reasoning performance.
+- **Local Inference:** The Verifier uses the local inference endpoint (`petunia.home.lan:8000`) for data residency and specialized reasoning performance.
 - **Completion Summaries:** The system relies on "Atomic Claims" — verifiable statements made by the builder that the verifier must prove or disprove based on session evidence.
 
 ---

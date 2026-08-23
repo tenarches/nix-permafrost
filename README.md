@@ -145,6 +145,7 @@ graph LR
         PKG["extraPackages<br/>(CLI tools, MCP servers)"]
         CRED["credentials<br/>(auto-injected API keys)"]
         SHARE["persistentShares<br/>(host ↔ guest mounts)"]
+        MOD["extraModules<br/>(per-guest NixOS config)"]
         GUI["gui<br/>(optional Wayland passthrough)"]
     end
 

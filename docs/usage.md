@@ -11,7 +11,7 @@ Agents are defined declaratively in `modules/inventory.nix`. Each spec declares 
 | **`bv`** | **Builder-Verifier Harness** | Node.js Orchestrator | Dual-agent workflow, MCP bridge, automated verification loop. |
 | **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini; minimal baseline for standalone tasks. |
 | **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration; `openclaude` compatibility. |
-| **`gemini`** | Google Specialist | `gemini-cli` | Standard interactive Gemini access. |
+| **`dsh`** | Self-Hosted Inference | `dsh` (DeepSeek Harness) | Local vLLM only; MCP servers, curated skills, browser UI. No TUI — see [docs/dsh.md](dsh.md). |
 | **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. |
 | **`antigravity`** | Web Browsing / GUI | Browser / GUI | Specialized for UI interaction. (Wayland passthrough is on every agent — see GUI and Display.) |
 | **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. |
@@ -87,7 +87,7 @@ Download a GGUF quantization of Qwen 3.6 35B-A3B (e.g., Q4_K_M or Q5_K_M) from H
 llama-server \
   --model path/to/qwen3.6-35b-a3b.gguf \
   --host 0.0.0.0 \
-  --port 8001 \
+  --port 8000 \
   --ctx-size 65536 \
   --n-gpu-layers 99
 ```
@@ -96,19 +96,20 @@ For 128k context (large sessions), start a second instance or reconfigure with `
 
 **3. Configure the endpoint:**
 
-The verifier endpoint is hardcoded to `http://petunia.home.lan:8001/v1` in three places. If your llama.cpp server runs on a different host or port, update all three:
+The verifier endpoint is `http://petunia.home.lan:8000/v1`, set in three places. If your
+server runs on a different host or port, update all three:
 
 | File | Field |
 |---|---|
-| `modules/inventory.nix:152` | `LLAMA_CPP_ENDPOINT` env var |
+| `modules/models.nix` | `baseUrl` — the shared catalogue, read by `pi`, `bv` and `dsh` |
+| `modules/inventory.nix` (`bv` spec) | `LLAMA_CPP_ENDPOINT` env var |
 | `home-files/bv/bv/verifier/extensions/verifier-provider.ts:6` | `baseUrl` |
-| `home-files/shared/.pi/agent/models.json:5,29` | `baseUrl` (both providers) |
 
 After changing these files, rebuild the VM (`sudo nix run .#bv`).
 
 **4. Verify connectivity from inside the guest:**
 ```bash
-curl http://your-host:8001/v1/models
+curl http://your-host:8000/v1/models
 ```
 You should see a JSON response listing the loaded model.
 
@@ -213,7 +214,7 @@ The notification bus is not required for either mode to function.
 ### Troubleshooting
 
 **Verifier always returns FAILED/UNCERTAIN:**
-- Check that the llama.cpp server is running and reachable from inside the guest (`curl http://your-host:8001/v1/models`).
+- Check that the llama.cpp server is running and reachable from inside the guest (`curl http://your-host:8000/v1/models`).
 - Verify the `api` field in `verifier-provider.ts` is `"openai"` (not `"openai-completions"`).
 - Check stderr output for `[VERIFY]` lines — if no text_delta events appear, the model endpoint is not responding.
 
