@@ -197,7 +197,10 @@ let
                 ) (spec.persistentShares or [ ]));
             }
           )
-        ];
+        ]
+        # Per-guest NixOS config. Same list the fleet path appends in
+        # modules/agents.nix, so a guest is identical either way it is launched.
+        ++ (spec.extraModules or [ ]);
       };
 
       runnerScript = pkgs.writeShellScriptBin spec.name ''

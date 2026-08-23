@@ -14,7 +14,13 @@ let
     autostart = false;
     specialArgs = { inherit inputs; };
     config = {
-      imports = [ ./agent-base.nix ];
+      # spec.extraModules is the escape hatch for a guest that needs NixOS
+      # config of its own rather than another spec field. homeFiles can only
+      # produce read-only store symlinks and env can only set variables, so a
+      # harness wanting an activation script, a firewall port or a systemd unit
+      # has nowhere else to put it. Reached from both launch paths, so a guest
+      # behaves the same under `nix run` as it does in the fleet.
+      imports = [ ./agent-base.nix ] ++ (spec.extraModules or [ ]);
 
       nixpkgs.overlays = spec.overlays or [ ];
 
