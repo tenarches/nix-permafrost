@@ -4,10 +4,11 @@
     "minimal": 1024,
     "low": 4096,
     "medium": 10240,
-    "high": 32768
+    "high": 32768,
+    "xhigh": 65536
   },
   "providers": {
-    "vllm-local": {                                                                                                                              
+    "vllm-local": {
       "name": "vllm",
       "baseUrl": "http://petunia.home.lan:8000/v1",
       "apiKey": "not-required",
@@ -16,15 +17,22 @@
         {
           "id": "qwen3.6-27b",
           "name": "Qwen 3.6 27B (128k)",
+          "reasoning": true,
           "contextWindow": 131072,
-          "maxTokens": 32000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        },
+        {
+          "id": "qwen3.8-27b",
+          "name": "Qwen 3.8 27B (128k)",
+          "reasoning": true,
+          "contextWindow": 131072,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
         {
           "id": "qwen3.6-35b-a3b",
           "name": "Qwen 3.6 35B-A3B (128k)",
+          "reasoning": true,
           "contextWindow": 131072,
-          "maxTokens": 32000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
