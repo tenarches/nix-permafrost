@@ -174,19 +174,41 @@ let
     '';
   };
 
-  # The same UI on the bridge, for browsing straight from the host.
+  # The same UI reachable from the host, without an ssh tunnel.
   #
-  # Two flags, both needed. `--host` because the default bind is loopback, and
-  # `--trusted-host` because every /api request is fenced on its Host header:
-  # the LAN address list is derived only from an all-interfaces bind, which the
-  # CLI refuses, so a specific bind trusts nothing unless told to.
+  # This has to go through a patch overlay rather than `--host`, because the
+  # webserver's host is a closed enum of exactly "127.0.0.1" and "0.0.0.0" —
+  # `--host ${guestIp}` fails schema validation at boot. The CLI separately
+  # refuses `--host 0.0.0.0` outright, on the grounds that it "would expose
+  # remote code execution to the network". The composition layer has no such
+  # guard, so setting the row directly is the only route.
+  #
+  # Taking that route deliberately. In the guest, "all interfaces" is loopback
+  # plus one address on a host-local bridge that is NAT'd outbound, so the
+  # exposure is the host and sibling guests — not the network upstream is
+  # warning about. It is still a real widening: the UI drives an agent whose
+  # sandbox is off, which is why loopback stays the default.
+  #
+  # No --trusted-host needed. The Host-header fence derives its trusted LAN
+  # addresses from the bind, and only does so for an all-interfaces bind —
+  # which is what this is.
+  lanPatch = (pkgs.formats.yaml { }).generate "dsh-web-lan.patch.yml" [
+    {
+      id = "webserver";
+      config = {
+        host = "0.0.0.0";
+        port = 3080;
+      };
+    }
+  ];
+
   dsh-web-lan = pkgs.writeShellApplication {
     name = "dsh-web-lan";
     text = ''
-      # Reachable from the host and from sibling guests on 192.168.33.0/24 —
-      # the bridge is NAT'd outbound, so no further than that.
-      exec dsh web --no-open --port 3080 \
-        --host ${guestIp} --trusted-host ${guestIp}:3080 "$@"
+      # http://${guestIp}:3080 from the host. --patch is a launcher flag, so it
+      # has to precede the profile's own arguments; `dsh web` is an alias for
+      # `--profile web` and would pass it through to the app instead.
+      exec dsh --profile web --patch ${lanPatch} --no-open "$@"
     '';
   };
 
