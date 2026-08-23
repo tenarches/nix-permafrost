@@ -605,5 +605,6 @@ in
   bv = mkRunner vms.bv;
   antigravity = mkRunner vms.antigravity;
   crush = mkRunner vms.crush;
+  dsh = mkRunner vms.dsh;
   default = mkRunner vms.claude;
 }

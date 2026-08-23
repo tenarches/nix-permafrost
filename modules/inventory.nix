@@ -189,6 +189,52 @@ let
       extraPackages = [ pkgs.antigravity-cli ];
     };
 
+    dsh = {
+      name = "dsh";
+      tapId = "dsh";
+      ip = "192.168.33.17";
+      mac = "02:00:00:00:00:17";
+      vsockCid = 17;
+
+      # No persistentShares. Nothing of this guest's own reaches the host: its
+      # whole configuration is generated from Nix in modules/dsh.nix and copied
+      # into the ephemeral home on every boot, so there is nothing to carry
+      # across and nothing to keep in sync with a host dotfile.
+
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.dsh
+        # `dsh plugin ... add <pkg>` forwards to pnpm, which has to be on PATH
+        # for optional bundles (the subagent-codex and subagent-claude-code
+        # providers, a third-party TUI) to be installable at all.
+        pkgs.pnpm
+        # dsh-model edits the patch file in place.
+        pkgs.yq-go
+      ]
+      ++ mcpServers;
+
+      extraModules = [
+        { _module.args.guestIp = "192.168.33.17"; }
+        ./dsh.nix
+      ];
+
+      env = {
+        # The microvm is the isolation boundary, so dsh's own sandbox is off and
+        # nothing prompts for approval. bwrap is deliberately absent for the
+        # same reason.
+        DSH_PERMISSION_MODE = "danger-full-access";
+
+        # Telemetry is off by default, but this also suppresses the anonymous
+        # user id that would otherwise be stamped on every provider request —
+        # including the ones going to our own endpoint. Any non-empty value is
+        # an authoritative opt-out.
+        DSH_TELEMETRY_DISABLED = "1";
+
+        # The endpoint wants no key, but the adapter still resolves the
+        # variable named by apiKeyEnv and errors when it is unset.
+        VLLM_API_KEY = "not-required";
+      };
+    };
+
     crush = {
       name = "crush";
       tapId = "crush";
