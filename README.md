@@ -167,7 +167,7 @@ graph LR
 ```
 
 `nix flake check` prints `warning: unknown flake output 'modules'` — that is expected.
-`flake.modules` is the dendritic convention's own namespace, not a flake output schema
+`flake.modules` is the dendritic convention's own namespace, not an output the flake schema
 knows about, so the warning is benign noise rather than a sign anything is broken.
 
 ---
