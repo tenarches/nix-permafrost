@@ -30,9 +30,15 @@
     let
       models = import ../_lib/models.nix { inherit pkgs lib; };
 
-      # The address the LAN web helper binds and prints. Read from the guest's
-      # own identity rather than injected, so the two cannot disagree.
+      # The address the TLS front end serves and the helper prints. Read from
+      # the guest's own identity rather than injected, so the two cannot
+      # disagree.
       inherit (config.permafrost.identity) ip;
+
+      # dsh's own plaintext listener, loopback-only, and the TLS port caddy
+      # publishes on the bridge.
+      port = 3080;
+      tlsPort = 3443;
 
       # vLLM speaks OpenAI, so it belongs to the pi-ai adapter. llm-deepseek is the
       # native DeepSeek route and cannot be pointed at a gateway this way.
@@ -194,52 +200,27 @@
         { insert = map mcpRow mcpServers; }
       ];
 
-      # dsh has no TUI. `dsh web` serves a browser SPA and defaults to loopback,
-      # which is the right default for a UI driving an agent with the sandbox off.
+      # dsh has no TUI; `dsh web` serves a browser SPA. It stays on loopback and
+      # caddy below is what the host talks to — see the header comment on
+      # services.caddy for why the plaintext bind cannot be exposed directly.
+      #
+      # --trusted-host names the authority caddy will forward under. The /api
+      # browser-trust fence accepts loopback unconditionally and otherwise wants
+      # a match here; a port-less entry matches that host on any port, so this
+      # does not have to track tlsPort. Rewriting the Host header at the proxy
+      # would do the same job, at the cost of lying to the application about
+      # which address the browser asked for.
       dsh-web = pkgs.writeShellApplication {
         name = "dsh-web";
         text = ''
-          # --no-open because there is no browser in the guest. Reach it with:
-          #   ssh -L 3080:127.0.0.1:3080 permafrost
-          exec dsh web --no-open --port 3080 "$@"
-        '';
-      };
-
-      # The same UI reachable from the host, without an ssh tunnel.
-      #
-      # This has to go through a patch overlay rather than `--host`, because the
-      # webserver's host is a closed enum of exactly "127.0.0.1" and "0.0.0.0" —
-      # `--host ${ip}` fails schema validation at boot. The CLI separately
-      # refuses `--host 0.0.0.0` outright, on the grounds that it "would expose
-      # remote code execution to the network". The composition layer has no such
-      # guard, so setting the row directly is the only route.
-      #
-      # Taking that route deliberately. In the guest, "all interfaces" is loopback
-      # plus one address on a host-local bridge that is NAT'd outbound, so the
-      # exposure is the host and sibling guests — not the network upstream is
-      # warning about. It is still a real widening: the UI drives an agent whose
-      # sandbox is off, which is why loopback stays the default.
-      #
-      # No --trusted-host needed. The Host-header fence derives its trusted LAN
-      # addresses from the bind, and only does so for an all-interfaces bind —
-      # which is what this is.
-      lanPatch = (pkgs.formats.yaml { }).generate "dsh-web-lan.patch.yml" [
-        {
-          id = "webserver";
-          config = {
-            host = "0.0.0.0";
-            port = 3080;
-          };
-        }
-      ];
-
-      dsh-web-lan = pkgs.writeShellApplication {
-        name = "dsh-web-lan";
-        text = ''
-          # http://${ip}:3080 from the host. --patch is a launcher flag, so it
-          # has to precede the profile's own arguments; `dsh web` is an alias for
-          # `--profile web` and would pass it through to the app instead.
-          exec dsh --profile web --patch ${lanPatch} --no-open "$@"
+          # --no-open because there is no browser in the guest. Reachable two
+          # ways once this is running:
+          #
+          #   https://${ip}:${toString tlsPort}
+          #     from the host, through caddy
+          #   http://localhost:${toString port}
+          #     through ssh -L ${toString port}:127.0.0.1:${toString port} permafrost
+          exec dsh web --no-open --port ${toString port} --trusted-host ${ip} "$@"
         '';
       };
 
@@ -301,9 +282,67 @@
         VLLM_API_KEY = "not-required";
       };
 
-      # dsh web binds loopback by default; the LAN helper needs this open. The
-      # bridge is host-local, so this is not exposed beyond the host and its guests.
-      networking.firewall.allowedTCPPorts = [ 3080 ];
+      # Only the TLS front end is published. dsh's own listener stays on
+      # loopback, reachable through an ssh tunnel and nothing else.
+      networking.firewall.allowedTCPPorts = [ tlsPort ];
+
+      # TLS in front of the web UI, because the browser will not run it
+      # otherwise.
+      #
+      # The SPA mints an id for every RPC with `crypto.randomUUID()`, and the
+      # browser only defines that in a *secure context*. `http://${ip}:${toString port}`
+      # is not one — no browser treats a plain-http RFC1918 origin as
+      # trustworthy — so the first /api call dies with "crypto.randomUUID is not
+      # a function" and the provider directory, Agent preset and Models panes
+      # never load. Serving the same UI over https fixes it at the origin, which
+      # is the only place it can be fixed: there is no dsh setting for this.
+      #
+      # This replaces the earlier all-interfaces plaintext bind, and is a
+      # narrowing rather than a widening — the UI drives an agent with its
+      # sandbox off, and it is no longer on the bridge in the clear.
+      #
+      # The guest is rebuilt from scratch on every boot, so caddy's local CA
+      # under /var/lib/caddy is new each launch and the browser asks to accept
+      # the certificate once per launch. Accepting still yields an https origin,
+      # which is the whole point. Keeping the CA would take a host share, and
+      # this repo does not put guest state on the host.
+      services.caddy = {
+        enable = true;
+
+        globalConfig = ''
+          # There is no plaintext vhost, so the automatic http->https redirect
+          # site would bind :80 for nothing.
+          auto_https disable_redirects
+
+          # `tls internal` otherwise tries to add its root to the system trust
+          # store, which means shelling out to sudo from a systemd service
+          # running as caddy — it fails and logs an error on every start. The
+          # guest has no browser, so nothing in it needs the root trusted; the
+          # host is where the certificate is judged.
+          skip_install_trust
+        '';
+
+        virtualHosts."https://${ip}:${toString tlsPort}" = {
+          # Bind the wildcard rather than the address itself. caddy.service
+          # does require network-online.target, so ${ip} would normally be
+          # assigned by then — but that makes the listener's success depend on
+          # systemd-networkd-wait-online agreeing, and this address is
+          # statically configured on an interface matched by a glob. The
+          # wildcard removes the question. Nothing is widened by it: the site
+          # address below still decides which Host is served, caddy matches an
+          # IP site by the connection's local address, and only ${toString tlsPort}
+          # is open in the firewall.
+          listenAddresses = [ "0.0.0.0" ];
+
+          # Nothing public can vouch for an RFC1918 address, so the certificate
+          # comes from caddy's own CA. 502s until `dsh-web` is running; that is
+          # expected, not a fault.
+          extraConfig = ''
+            tls internal
+            reverse_proxy 127.0.0.1:${toString port}
+          '';
+        };
+      };
 
       # Taken as a function so `lib` here is home-manager's, which carries the
       # activation-script DAG helpers the NixOS lib does not.
@@ -312,7 +351,6 @@
         {
           home.packages = [
             dsh-web
-            dsh-web-lan
             dsh-model
           ];
 

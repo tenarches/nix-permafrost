@@ -102,43 +102,54 @@ non-zero otherwise. No server, no port, nothing to clean up. Good for scripting.
 
 ### The browser UI
 
-There is no terminal UI, so anything interactive happens in a browser. Two helpers ship
-in the guest.
-
-**`dsh-web`** — the default. Serves on the guest's loopback only. From your host:
-
-```bash
-ssh -L 3080:127.0.0.1:3080 permafrost    # leave this running
-# then in that session, or another one:
-dsh-web
-```
-
-Open <http://localhost:3080>.
-
-**`dsh-web-lan`** — skips the tunnel. Serves on all the guest's interfaces:
+There is no terminal UI, so anything interactive happens in a browser. One helper ships
+in the guest, and there are two ways to reach what it serves.
 
 ```bash
 ssh permafrost
-dsh-web-lan
+dsh-web          # leave this running; it does not open a browser, there isn't one here
 ```
 
-Open <http://192.168.33.10:3080> directly from the host.
+**Over TLS, no tunnel.** Open <https://192.168.33.10:3443> from the host. The guest runs
+caddy in front of `dsh-web` and issues its own certificate, so your browser will ask you
+to accept it. Do — see the warning below for why this is not optional.
 
-Neither opens a browser — there isn't one in the guest.
+**Over an ssh tunnel.** From the host:
 
-> **Why two.** Upstream deliberately refuses `--host 0.0.0.0`, on the grounds that it
-> "would expose remote code execution to the network", and the bind address is a closed
-> choice of `127.0.0.1` or `0.0.0.0` — you cannot name a specific IP. `dsh-web-lan` sets
-> the bind through the config layer, which has no such guard.
+```bash
+ssh -L 3080:127.0.0.1:3080 permafrost    # leave this running
+```
+
+Open <http://localhost:3080>. No certificate prompt, because `localhost` gets the same
+treatment `https` does.
+
+> **The UI does not work over plain `http` to `192.168.33.10`.** Every request the page
+> makes mints an id with `crypto.randomUUID()`, which browsers define only in a *secure
+> context* — `https`, or `http` on `localhost`. A plain-http origin on a private address
+> is neither, so the first API call dies with
 >
-> That is a considered exception, not an oversight. `192.168.33.0/24` is a bridge that
-> exists only on your host and is NAT'd outbound, so "all interfaces" here means the host
-> and anything else that ever joins that bridge — not the internet. It is still a real
-> widening: this UI drives an agent with its sandbox off, and anything with LAN access to
-> the guest can reach it. Loopback stays the default for that reason.
+> ```
+> Loading the provider directory failed: crypto.randomUUID is not a function
+> ```
 >
-> Requests are additionally fenced on their `Host` header — a request arriving with a
-> forged `Host` gets `403 forbidden` regardless.
+> and Agent preset, Models and everything behind them stay empty. That is the whole
+> reason for the TLS front end; there is no dsh setting that avoids it.
+>
+> **You will be asked to accept the certificate on every launch.** The guest is rebuilt
+> from scratch each boot, so caddy's certificate authority is new each time. Clicking
+> through still gives you an `https` origin, which is all the page needs. Keeping the
+> authority between boots would mean storing guest state on your host, which this repo
+> does not do.
+
+> **What is exposed.** Only port `3443` is open. dsh's own listener stays on the guest's
+> loopback, so the plaintext UI is not on the bridge at all. `192.168.33.0/24` is a bridge
+> that exists only on your host and is NAT'd outbound, so the TLS port is reachable from
+> the host and anything else that joins that bridge — not from the internet. It is still
+> worth knowing this UI drives an agent with its sandbox off.
+>
+> Requests are additionally fenced on their `Host` header. `dsh-web` passes
+> `--trusted-host 192.168.33.10` so the address caddy forwards under is accepted; a
+> request arriving with any other `Host` gets `403 forbidden`.
 
 ---
 
@@ -412,8 +423,15 @@ live, `cordis.patch.yml` needs a profile restart. Confirm with `--dump-config`.
 **A skill is not showing up.** Kebab-case `name` in the frontmatter, and
 `<name>/SKILL.md` exactly one level down.
 
-**403 from the web UI.** The Host-header fence. Reach the UI at the address it was bound
-to, not through a proxy or alias.
+**403 from the web UI.** The Host-header fence. Reach the UI at
+<https://192.168.33.10:3443> or <http://localhost:3080>, not through a proxy or alias of
+your own.
+
+**`crypto.randomUUID is not a function`.** You are on a plain-http origin that is not
+localhost. Use <https://192.168.33.10:3443> or the tunnel — see [§4](#the-browser-ui).
+
+**502 from <https://192.168.33.10:3443>.** caddy is up but `dsh-web` is not running in the
+guest. Start it.
 
 **The VM will not start.** `sudo nix run .#permafrost` needs root, a free `192.168.33.10`,
 and KVM. `nix run .#status` shows whether the guest is already running; `nix run .#gc`
