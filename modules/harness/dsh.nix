@@ -200,7 +200,7 @@
         name = "dsh-web";
         text = ''
           # --no-open because there is no browser in the guest. Reach it with:
-          #   ssh -L 3080:127.0.0.1:3080 permafrost-dsh
+          #   ssh -L 3080:127.0.0.1:3080 permafrost
           exec dsh web --no-open --port 3080 "$@"
         '';
       };
