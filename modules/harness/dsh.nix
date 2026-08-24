@@ -44,6 +44,11 @@
       # unit's own ReadWritePaths already cover it.
       tlsDir = "/var/lib/caddy/tls";
 
+      # Where the launcher's virtiofs share lands. Root-only, so the agent
+      # cannot read the key out of it — which matters only because the agent
+      # no longer has a route to root; see guest/base.nix.
+      vaultTlsDir = "/run/vault-tls";
+
       # A self-signed leaf for the guest's address. No authority, no chain,
       # nothing to install anywhere — the browser is asked about this exact
       # certificate and that is the end of it.
@@ -387,15 +392,58 @@
       # preStart rather than serviceConfig.ExecStartPre: it is types.lines, so
       # it merges instead of colliding if the caddy module ever grows one of
       # its own.
-      systemd.services.caddy.preStart = "${lib.getExe tlsCert}";
+      # A Vault-issued certificate, when the launcher managed to get one, takes
+      # precedence over the self-signed fallback below.
+      #
+      # This is the only root-run step in the whole path, and it is
+      # provisioning rather than escalation: systemd starts it as root to
+      # install a file with ownership caddy cannot give itself, and it holds no
+      # Vault access, no key generation, and no trust-store contact. caddy's
+      # own units keep their "nothing runs as root, and nothing asks to"
+      # property.
+      #
+      # ConditionPathExists rather than a shell test, so a launch with no
+      # certificate skips the unit entirely instead of running a no-op — the
+      # skip is then visible in `systemctl status` rather than silent.
+      systemd.services = {
+        dsh-web-tls-vault = {
+          description = "Install the Vault-issued dsh web UI certificate";
+          before = [ "caddy.service" ];
+          requiredBy = [ "caddy.service" ];
+          unitConfig = {
+            # Without this the condition below is evaluated before the
+            # virtiofs share is mounted, the unit skips, and a certificate
+            # that was delivered is silently replaced by a self-signed one.
+            RequiresMountsFor = vaultTlsDir;
+            ConditionPathExists = "${vaultTlsDir}/cert.pem";
+          };
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = ''
+            install -d -m 0750 -o caddy -g caddy ${tlsDir}
+            install -m 0444 -o caddy -g caddy ${vaultTlsDir}/cert.pem ${tlsDir}/cert.pem
+            install -m 0400 -o caddy -g caddy ${vaultTlsDir}/key.pem ${tlsDir}/key.pem
+          '';
+        };
 
-      systemd.services.caddy.serviceConfig = {
-        # Both come from the unit caddy ships and neither is wanted: ${toString tlsPort}
-        # is above 1024, and a reverse proxy has no business holding
-        # CAP_NET_ADMIN. An empty assignment in the drop-in resets the list the
-        # packaged unit set.
-        AmbientCapabilities = [ "" ];
-        CapabilityBoundingSet = [ "" ];
+        caddy = {
+          # Unchanged, and load-bearing precisely because it is idempotent:
+          # when the unit above has run, both files already exist and this
+          # exits 0 without generating anything. When it has not, the
+          # self-signed path fires exactly as it did before Vault existed.
+          preStart = "${lib.getExe tlsCert}";
+
+          serviceConfig = {
+            # Both come from the unit caddy ships and neither is wanted:
+            # ${toString tlsPort} is above 1024, and a reverse proxy has no
+            # business holding CAP_NET_ADMIN. An empty assignment in the
+            # drop-in resets the list the packaged unit set.
+            AmbientCapabilities = [ "" ];
+            CapabilityBoundingSet = [ "" ];
+          };
+        };
       };
 
       # Taken as a function so `lib` here is home-manager's, which carries the

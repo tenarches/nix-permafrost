@@ -70,6 +70,22 @@
             mountPoint = "/etc/ssh/authorized_keys.d";
             socket = "${runtimeDir}/ssh.sock";
           }
+          {
+            # A TLS certificate for the web UI, issued from Vault by the runner
+            # at launch. Empty when there was no token or Vault said no, which
+            # is how the guest decides to self-sign instead — see
+            # harness/dsh.nix. Runner-only for the same reason as the keys
+            # above: the fleet path has nobody to ask for one.
+            #
+            # Under /run rather than /mnt: this is per-boot credential
+            # material, not persistence, and /mnt/persist means a host share
+            # that outlives the guest.
+            tag = "vault_tls";
+            proto = "virtiofs";
+            source = "host-managed-virtiofsd-at-vault-tls";
+            mountPoint = "/run/vault-tls";
+            socket = "${runtimeDir}/vault-tls.sock";
+          }
         ]
         ++ map (s: {
           tag = shareLib.tag s;

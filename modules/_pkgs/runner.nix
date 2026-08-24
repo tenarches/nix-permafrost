@@ -161,6 +161,100 @@ pkgs.writeShellScriptBin identity.name ''
     fi
   fi
 
+  # 3c. JIT TLS certificate for the guest's web UI.
+  #
+  # Optional and never fatal. The guest config always carries both paths and
+  # decides at boot which one applies: a certificate here means caddy serves
+  # it, an empty directory means caddy self-signs exactly as it did before.
+  # Nothing about that is expressed in Nix — this is a shell script, so the
+  # optionality is shell control flow, the same shape as the agent probe above.
+  #
+  # Issued here rather than in the guest on purpose. The guest runs coding
+  # agents with their sandboxes off; handing it a Vault credential would let
+  # anything running in it mint certificates from the intermediate. Issuing on
+  # the host means the guest receives one leaf, for one address, and holds no
+  # Vault access at all — it never even talks to Vault, which is also why the
+  # CA does not have to be added to the guest's trust store.
+  #
+  # Overridable without a rebuild, because the role's own constraints
+  # (allowed_domains, require_cn, allow_ip_sans) live with the CA rather than
+  # here, and a mismatch should be a one-line fix rather than a flake edit.
+  VAULT_ADDR="''${VAULT_ADDR:-https://vault.service.consul:8200}"
+  VAULT_PKI_MOUNT="''${VAULT_PKI_MOUNT:-pki_int_homelab}"
+  VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-home-lan}"
+  VAULT_TLS_CN="''${VAULT_TLS_CN:-${identity.name}.home.lan}"
+  VAULT_TLS_TTL="''${VAULT_TLS_TTL:-12h}"
+
+  VAULT_TLS_DIR="$SOCKET_DIR/vault-tls"
+  VAULT_TLS_SERIAL=""
+
+  # sudo strips VAULT_TOKEN just as it strips SSH_AUTH_SOCK. Fall back to the
+  # file the vault CLI itself reads, in the launching user's home.
+  resolve_vault_token() {
+    if [ -n "''${VAULT_TOKEN:-}" ]; then
+      return 0
+    fi
+    if [ -r "$REAL_HOME/.vault-token" ]; then
+      VAULT_TOKEN=$(${pkgs.coreutils}/bin/cat "$REAL_HOME/.vault-token" 2>/dev/null || true)
+    fi
+  }
+
+  issue_vault_tls() {
+    resolve_vault_token
+
+    if [ -z "''${VAULT_TOKEN:-}" ]; then
+      echo "No Vault token found; the guest will self-sign its web UI certificate." >&2
+      echo "  Run 'vault login' for a browser-trusted one." >&2
+      return 0
+    fi
+
+    RESPONSE=$(${pkgs.curl}/bin/curl -sS --max-time 15 \
+      -H "X-Vault-Token: $VAULT_TOKEN" \
+      -X POST \
+      -d "{\"common_name\":\"$VAULT_TLS_CN\",\"ip_sans\":\"${identity.ip}\",\"ttl\":\"$VAULT_TLS_TTL\"}" \
+      "$VAULT_ADDR/v1/$VAULT_PKI_MOUNT/issue/$VAULT_PKI_ROLE" 2>&1) || {
+      echo "Vault unreachable; the guest will self-sign its web UI certificate." >&2
+      return 0
+    }
+
+    if ! echo "$RESPONSE" | ${pkgs.jq}/bin/jq -e '.data.private_key' >/dev/null 2>&1; then
+      echo "Vault refused to issue a certificate; the guest will self-sign." >&2
+      echo "  $(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -rc '.errors // .' 2>/dev/null || echo "$RESPONSE")" >&2
+      echo "  Check: vault read $VAULT_PKI_MOUNT/roles/$VAULT_PKI_ROLE" >&2
+      return 0
+    fi
+
+    # Leaf first, then the chain, in one file — caddy wants the bundle.
+    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.certificate, (.data.ca_chain // [] | .[])' \
+      > "$VAULT_TLS_DIR/cert.pem"
+    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.private_key' > "$VAULT_TLS_DIR/key.pem"
+    VAULT_TLS_SERIAL=$(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.serial_number')
+    echo "$VAULT_TLS_SERIAL" > "$VAULT_TLS_DIR/serial"
+
+    chmod 0644 "$VAULT_TLS_DIR/cert.pem" "$VAULT_TLS_DIR/serial"
+    chmod 0600 "$VAULT_TLS_DIR/key.pem"
+
+    echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE (ttl $VAULT_TLS_TTL)."
+  }
+
+  # Best-effort, and deliberately so: a stolen leaf for a host-local bridge
+  # address is already bounded by its ttl, and browsers routinely skip CRL and
+  # OCSP for private CAs. This is Vault-side hygiene, not enforcement.
+  revoke_vault_tls() {
+    SERIAL="''${1:-}"
+    [ -n "$SERIAL" ] || return 0
+    resolve_vault_token
+    [ -n "''${VAULT_TOKEN:-}" ] || return 0
+
+    ${pkgs.curl}/bin/curl -sS --max-time 10 \
+      -H "X-Vault-Token: $VAULT_TOKEN" \
+      -X POST \
+      -d "{\"serial_number\":\"$SERIAL\"}" \
+      "$VAULT_ADDR/v1/$VAULT_PKI_MOUNT/revoke" >/dev/null 2>&1 \
+      && echo "Revoked web UI certificate $SERIAL." \
+      || true
+  }
+
   case "$COMMAND" in
     status)
       if systemctl is-active --quiet "$UNIT_NAME"; then
@@ -174,8 +268,17 @@ pkgs.writeShellScriptBin identity.name ''
       exit 0
       ;;
     stop)
+      # Read the serial before stopping: the runtime directory holding it goes
+      # away with the unit, and revoking a certificate we can no longer name
+      # is not possible.
+      if [ -r "$VAULT_TLS_DIR/serial" ]; then
+        STOPPING_SERIAL=$(${pkgs.coreutils}/bin/cat "$VAULT_TLS_DIR/serial" 2>/dev/null || true)
+      else
+        STOPPING_SERIAL=""
+      fi
       echo "Stopping $UNIT_NAME..."
       systemctl stop "$UNIT_NAME"
+      revoke_vault_tls "$STOPPING_SERIAL"
       exit 0
       ;;
     run|start)
@@ -192,6 +295,13 @@ pkgs.writeShellScriptBin identity.name ''
         echo "Error: $UNIT_NAME is already running."
         exit 1
       fi
+
+      # Always created, even when issuance does not happen: the share is
+      # declared unconditionally in the guest, so the directory behind it has
+      # to exist. Empty is how the guest learns to self-sign instead.
+      mkdir -p "$VAULT_TLS_DIR"
+      chmod 700 "$VAULT_TLS_DIR"
+      issue_vault_tls
       ;;
     *)
       echo "Usage: $0 {run|start|stop|status}"
@@ -247,6 +357,7 @@ pkgs.writeShellScriptBin identity.name ''
     # Start virtiofsd backends
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
+    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/vault-tls.sock" --shared-dir "'$VAULT_TLS_DIR'" --sandbox namespace &
 
     ${lib.concatMapStringsSep "\n" (s: ''
       ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -257,6 +368,7 @@ pkgs.writeShellScriptBin identity.name ''
     echo "Waiting for virtiofsd backends..."
     while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    while [ ! -S "$SOCKET_DIR/vault-tls.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     ${lib.concatMapStringsSep "\n" (
       s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
     ) shares}
@@ -303,6 +415,7 @@ pkgs.writeShellScriptBin identity.name ''
     --property="Environment=SOCKET_DIR=$SOCKET_DIR"
     --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
     --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
+    --property="Environment=VAULT_TLS_DIR=$VAULT_TLS_DIR"
     --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
     --description="Permafrost VM: ${identity.name}"
     # Reclaim the ephemeral disk images whenever the unit stops — clean exit,
@@ -324,7 +437,12 @@ pkgs.writeShellScriptBin identity.name ''
   )
 
   if [ "$COMMAND" = "run" ]; then
-    systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+    # --wait blocks until the guest is gone, so this is the run-mode equivalent
+    # of what the stop subcommand does. The serial is held in a variable rather
+    # than read back from disk: the runtime directory is already gone by the
+    # time this line runs.
+    systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND" || true
+    revoke_vault_tls "$VAULT_TLS_SERIAL"
   else
     systemd-run "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
     echo "${identity.name} started in background (unit: $UNIT_NAME)."
