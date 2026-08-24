@@ -258,12 +258,15 @@ pkgs.writeShellScriptBin identity.name ''
       s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
     ) shares}
 
-    # Final VM Launch
-    # All control sockets are placed in SOCKET_DIR: the notify.vsock and
-    # nixos.sock are moved here to keep the project root pure.
-    ${nixos.config.microvm.declaredRunner}/bin/microvm-run \
-      --api-socket "$SOCKET_DIR/nixos.sock" \
-      --vsock "cid=${toString identity.vsockCid},socket=$SOCKET_DIR/notify.vsock"
+    # Final VM Launch.
+    #
+    # No socket flags here: microvm.nix bakes them into microvm-run and that
+    # script never forwards "$@" — it sets `runtime_args=` and leaves it
+    # empty — so anything passed is silently dropped. The baked paths are
+    # relative (`--api-socket permafrost.sock`, `--vsock ...socket=notify.vsock`),
+    # which is why the unit sets WorkingDirectory below. Without it they
+    # resolved against / and littered the host filesystem root.
+    ${nixos.config.microvm.declaredRunner}/bin/microvm-run
   '
 
   RUN_ARGS=(
@@ -272,6 +275,10 @@ pkgs.writeShellScriptBin identity.name ''
     --service-type=exec
     --property="RuntimeDirectory=$RUNTIME_NAME"
     --property="RuntimeDirectoryPreserve=no"
+    # microvm-run's baked socket paths are relative, so this is what decides
+    # where they land. Pointing it at the RuntimeDirectory means they are
+    # reclaimed with it rather than accumulating at /.
+    --property="WorkingDirectory=$SOCKET_DIR"
     --property="Environment=PATH=${
       lib.makeBinPath [
         pkgs.coreutils
@@ -300,6 +307,17 @@ pkgs.writeShellScriptBin identity.name ''
     # the next boot, so a host power loss leaves at most one stale image set,
     # reclaimed on the next launch or by `nix run .#gc`.
     --property="ExecStopPost=${pkgs.coreutils}/bin/rm -rf $STATE_DIR"
+    # Ask the guest to shut down instead of cutting its power. microvm.nix
+    # ships this client: it PUTs vm.power-button on the hypervisor API socket
+    # and then waits on $MAINPID, which systemd sets for ExecStop. The guest
+    # has the matching ACPI button (PNP0C0C) and logind's default
+    # HandlePowerKey=poweroff turns it into a real shutdown.
+    #
+    # Bounded rather than left at systemd's 90s default: if the guest ignores
+    # the button, the normal SIGTERM/SIGKILL escalation still ends it, and
+    # there is no reason to wait a minute and a half to find that out.
+    --property="ExecStop=${nixos.config.microvm.declaredRunner}/bin/microvm-shutdown"
+    --property="TimeoutStopSec=45s"
   )
 
   if [ "$COMMAND" = "run" ]; then
