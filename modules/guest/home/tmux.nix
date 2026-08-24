@@ -2,8 +2,15 @@
   # tmux is configured here rather than at the system level so that stylix,
   # whose tmux target is Home Manager only, owns its colours. The binary is in
   # environment.systemPackages (guest/base.nix) as well, for root.
+  #
+  # The bindings are not written out here: they come from _lib/keymap.nix, the
+  # same source guest/home/herdr.nix renders herdr's `[keys]` table from, so the
+  # two multiplexers cannot drift apart.
   flake.modules.homeManager.agent-tmux =
-    { pkgs, ... }:
+    { pkgs, lib, ... }:
+    let
+      keymap = import ../../_lib/keymap.nix { inherit lib; };
+    in
     {
       programs.tmux = {
         enable = true;
@@ -15,7 +22,7 @@
         baseIndex = 1;
         escapeTime = 0; # Fix for Neovim lag
         # Approachable screen-like binding
-        shortcut = "a";
+        shortcut = keymap.prefix.tmux;
 
         extraConfig = ''
           # tmux starts a login shell by default, which can reset PATH.
@@ -30,21 +37,10 @@
           set -g window-status-format " #I:#W "
           set -g window-status-current-format " #I:#W "
 
-          # Easy splits
-          bind | split-window -h -c "#{pane_current_path}"
-          bind - split-window -v -c "#{pane_current_path}"
+          ${keymap.renderTmux keymap.multiplexer}
+
           unbind '"'
           unbind %
-
-          # Vim-style pane selection
-          bind h select-pane -L
-          bind j select-pane -D
-          bind k select-pane -U
-          bind l select-pane -R
-
-          # Shift-arrow to switch windows
-          bind -n S-Left  previous-window
-          bind -n S-Right next-window
 
           # Right-click to paste from the tmux buffer
           bind-key -n MouseDown3Pane paste-buffer
