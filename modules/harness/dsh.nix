@@ -40,6 +40,37 @@
       port = 3080;
       tlsPort = 3443;
 
+      # Under caddy's StateDirectory, so systemd creates and owns it and the
+      # unit's own ReadWritePaths already cover it.
+      tlsDir = "/var/lib/caddy/tls";
+
+      # A self-signed leaf for the guest's address. No authority, no chain,
+      # nothing to install anywhere — the browser is asked about this exact
+      # certificate and that is the end of it.
+      #
+      # Idempotent: a `systemctl restart caddy` mid-session must not mint a new
+      # one, or the certificate the browser was just shown stops matching.
+      tlsCert = pkgs.writeShellApplication {
+        name = "dsh-web-tls-cert";
+        runtimeInputs = [ pkgs.openssl ];
+        text = ''
+          if [ -s ${tlsDir}/cert.pem ] && [ -s ${tlsDir}/key.pem ]; then
+            exit 0
+          fi
+
+          mkdir -p ${tlsDir}
+          openssl req -x509 -newkey rsa:2048 -noenc -days 365 \
+            -subj "/CN=${ip}" \
+            -addext "subjectAltName=IP:${ip}" \
+            -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+            -addext "extendedKeyUsage=serverAuth" \
+            -keyout ${tlsDir}/key.pem \
+            -out ${tlsDir}/cert.pem
+          chmod 0600 ${tlsDir}/key.pem
+          chmod 0644 ${tlsDir}/cert.pem
+        '';
+      };
+
       # vLLM speaks OpenAI, so it belongs to the pi-ai adapter. llm-deepseek is the
       # native DeepSeek route and cannot be pointed at a gateway this way.
       #
@@ -301,26 +332,31 @@
       # narrowing rather than a widening — the UI drives an agent with its
       # sandbox off, and it is no longer on the bridge in the clear.
       #
-      # The guest is rebuilt from scratch on every boot, so caddy's local CA
-      # under /var/lib/caddy is new each launch and the browser asks to accept
-      # the certificate once per launch. Accepting still yields an https origin,
-      # which is the whole point. Keeping the CA would take a host share, and
-      # this repo does not put guest state on the host.
+      # The certificate is handed to caddy already made, rather than left to
+      # `tls internal`. That directive engages caddy's PKI app, which stands up
+      # a local certificate authority and then tries to add its root to the
+      # system trust store — by shelling out to `sudo`, from a service running
+      # as an unprivileged user. `skip_install_trust` declines the attempt but
+      # leaves the mechanism in place, and a web server that can reach for
+      # privilege to do PKI is the wrong shape for a guest like this one.
+      #
+      # With an explicit certificate none of it is reached: caddy reports
+      # "skipping automatic certificate management because one or more matching
+      # certificates are already loaded", creates no authority, and touches no
+      # trust store. Verified against caddy 2.11.4.
+      #
+      # The guest is rebuilt from scratch on every boot and /var/lib with it, so
+      # the certificate is new each launch and the browser asks to accept it
+      # once per launch. Accepting still yields an https origin, which is the
+      # whole point. The alternatives are both worse: keeping it across boots
+      # needs a host share, and baking it into the store publishes the private
+      # key to anyone who can read /nix/store.
       services.caddy = {
         enable = true;
 
-        globalConfig = ''
-          # There is no plaintext vhost, so the automatic http->https redirect
-          # site would bind :80 for nothing.
-          auto_https disable_redirects
-
-          # `tls internal` otherwise tries to add its root to the system trust
-          # store, which means shelling out to sudo from a systemd service
-          # running as caddy — it fails and logs an error on every start. The
-          # guest has no browser, so nothing in it needs the root trusted; the
-          # host is where the certificate is judged.
-          skip_install_trust
-        '';
+        # There is no plaintext vhost, so the automatic http->https redirect
+        # site would bind :80 for nothing.
+        globalConfig = "auto_https disable_redirects";
 
         virtualHosts."https://${ip}:${toString tlsPort}" = {
           # Bind the wildcard rather than the address itself. caddy.service
@@ -335,13 +371,31 @@
           listenAddresses = [ "0.0.0.0" ];
 
           # Nothing public can vouch for an RFC1918 address, so the certificate
-          # comes from caddy's own CA. 502s until `dsh-web` is running; that is
-          # expected, not a fault.
+          # is the self-signed one minted below. 502s until `dsh-web` is
+          # running; that is expected, not a fault.
           extraConfig = ''
-            tls internal
+            tls ${tlsDir}/cert.pem ${tlsDir}/key.pem
             reverse_proxy 127.0.0.1:${toString port}
           '';
         };
+      };
+
+      # Minting it is the service's own first act, as its own unprivileged
+      # user, inside the StateDirectory systemd already gives it. Nothing here
+      # runs as root, and nothing asks to.
+      #
+      # preStart rather than serviceConfig.ExecStartPre: it is types.lines, so
+      # it merges instead of colliding if the caddy module ever grows one of
+      # its own.
+      systemd.services.caddy.preStart = "${lib.getExe tlsCert}";
+
+      systemd.services.caddy.serviceConfig = {
+        # Both come from the unit caddy ships and neither is wanted: ${toString tlsPort}
+        # is above 1024, and a reverse proxy has no business holding
+        # CAP_NET_ADMIN. An empty assignment in the drop-in resets the list the
+        # packaged unit set.
+        AmbientCapabilities = [ "" ];
+        CapabilityBoundingSet = [ "" ];
       };
 
       # Taken as a function so `lib` here is home-manager's, which carries the
