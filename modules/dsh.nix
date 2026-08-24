@@ -134,10 +134,34 @@ let
       name = "nixos";
       package = pkgs.mcp-nixos;
     }
+    # --log-level fatal is about the terminal, not the server. Logrus writes to
+    # stderr, which a stdio MCP child inherits from whatever launched dsh, so
+    # every session opened with the web helpers printed four lines ending in
+    #
+    #   NewSessionHandler failed to create TFE client
+    #     error="open ~/.terraform.d/credentials.tfrc.json: no such file"
+    #   Session has no valid TFE client - TFE tools will not be available
+    #
+    # which reads as a failed start and is not one. The session handler tries
+    # for an HCP Terraform client unconditionally — --toolsets changes nothing,
+    # confirmed by diffing tools/list between `all` and `registry`: nine
+    # registry tools either way, no TFE tool ever registered without a token.
+    # No token reaches this guest, so the client it is failing to build is one
+    # nothing here would use.
+    #
+    # fatal rather than error, because the second line is a warning and the
+    # first is logged at error. Nothing is lost that would still be
+    # recoverable: a log level cannot silence a fatal, and JSON-RPC is on
+    # stdout, untouched. One line survives — "Terraform MCP Server running on
+    # stdio", printed to stderr directly rather than through logrus.
     {
       name = "terraform";
       package = pkgs.terraform-mcp-server;
-      args = [ "stdio" ];
+      args = [
+        "stdio"
+        "--log-level"
+        "fatal"
+      ];
     }
   ];
 
