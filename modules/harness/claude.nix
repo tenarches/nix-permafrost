@@ -1,13 +1,10 @@
 { inputs, ... }:
 {
-  # Claude Code, plus openclaude — a locally packaged npm tool built from
-  # modules/_pkgs/openclaude.nix.
   flake.modules.nixos.harness-claude =
     { pkgs, ... }:
     {
       environment.systemPackages = [
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code
-        (pkgs.callPackage ../_pkgs/openclaude.nix { })
       ];
 
       permafrost.shares = [

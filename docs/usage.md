@@ -10,7 +10,8 @@ via `permafrost.shares`.
 
 | Harness | Purpose | Primary Tool | Key Features |
 | :--- | :--- | :--- | :--- |
-| **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration; `openclaude` compatibility. Shares `~/.claude` and `~/.claude.json`. |
+| **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration. Shares `~/.claude` and `~/.claude.json`. |
+| **`openclaude`** | Claude Code alternative | `openclaude` | An independent fork, vendored from npm rather than `llm-agents.nix`. Keeps its own state: shares `~/.openclaude` and `~/.openclaude.json`. |
 | **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. Shares `~/.config/opencode`. |
 | **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini and the self-hosted models; ships with `mcporter`. Shares `~/.pi` and `~/.mcporter`. |
 | **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. Shares `~/.config/crush` and `~/.local/share/crush`. |
@@ -69,13 +70,15 @@ file, never rewrites it, so a symlink is safe.
 ### 2. Persistent Shares (Mutable)
 
 `permafrost.shares` entries map host paths into the guest over virtiofs; they survive VM
-termination. Eight are declared across the guest-wide and per-harness modules:
+termination. Ten are declared across the guest-wide and per-harness modules:
 
 | Share | Declared by | Guest path |
 | :--- | :--- | :--- |
 | `.agents` | `guest/base.nix` (every guest) | `~/.agents` — skills and instructions every harness reads |
 | `.claude` | `harness/claude.nix` | `~/.claude` |
 | `.config/claude` | `harness/claude.nix` | `~/.claude-config`, linked at `~/.claude.json` |
+| `.openclaude` | `harness/openclaude.nix` | `~/.openclaude` |
+| `.config/openclaude` | `harness/openclaude.nix` | `~/.openclaude-config`, linked at `~/.openclaude.json` |
 | `.config/opencode` | `harness/opencode.nix` | `~/.config/opencode` |
 | `.pi` | `harness/pi.nix` | `~/.pi` — Gemini OAuth tokens from `pi /login` |
 | `.mcporter` | `harness/pi.nix` | `~/.mcporter` |

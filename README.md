@@ -5,8 +5,8 @@ NixOS. By using **cloud-hypervisor** via `microvm.nix`, Permafrost enforces a KV
 boundary, so an agent that may execute arbitrary code or shell commands stays confined to a
 disposable virtual machine.
 
-The whole fleet is one guest, `permafrost`, carrying every harness at once: Claude Code
-(plus openclaude), opencode, pi (plus mcporter), crush, dsh, antigravity-cli, five MCP
+The whole fleet is one guest, `permafrost`, carrying every harness at once: Claude Code,
+openclaude, opencode, pi (plus mcporter), crush, dsh, antigravity-cli, five MCP
 servers, and Playwright. There is one runner, one address, one ssh alias — see
 [Harness Modules](#harness-modules) for why adding a new agent is now adding one file.
 
@@ -246,7 +246,7 @@ under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot
 a sparse image is 27–52 ms, and swap is initialised by writing only a header host-side
 (`mkswap`, ~7 ms) rather than `dd`-ing 8 GiB through virtio-blk on every boot.
 
-The eight shares carry an agent's auth and history across a boot that otherwise wipes
+The ten shares carry an agent's auth and history across a boot that otherwise wipes
 everything: `.agents` (every harness's skills and instructions, shared by `guest-base.nix`),
 `.claude`, `.config/claude` (mounted as `.claude-config`, linked to `~/.claude.json`),
 `.config/opencode`, `.pi`, `.mcporter`, `.config/crush`, `.local/share/crush`.
@@ -262,7 +262,7 @@ builds reaches the host unless it is pushed somewhere.
 graph TD
     subgraph HOST_FS["Host Filesystem"]
         H_STORE["/nix/store<br/>(immutable)"]
-        H_SHARES["8 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.config/opencode,<br/>~/.pi, ~/.mcporter, ~/.config/crush,<br/>~/.local/share/crush"]
+        H_SHARES["10 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.openclaude,<br/>~/.config/openclaude, ~/.config/opencode,<br/>~/.pi, ~/.mcporter, ~/.config/crush,<br/>~/.local/share/crush"]
         H_IMG["/var/lib/permafrost/permafrost/*.img<br/>(sparse, wiped each boot)"]
     end
 

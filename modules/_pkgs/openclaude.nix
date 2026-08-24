@@ -15,7 +15,7 @@ pkgs.buildNpmPackage rec {
   #      tar -xf <TGZ_FILE>
   #      cd package && npm install --package-lock-only --legacy-peer-deps
   #      cp package-lock.json modules/_pkgs/openclaude-lock.json
-  #    - Run: nix build .#claude (or the openclaude package)
+  #    - Run: nix build .#permafrost
   #    - Copy the 'got:' hash from the failure message.
   src = pkgs.fetchurl {
     url = "https://registry.npmjs.org/@gitlawb/openclaude/-/openclaude-${version}.tgz";

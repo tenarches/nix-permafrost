@@ -83,8 +83,10 @@ directory — `.claude.json`, linking into the `.claude-config` share, is the ex
 the prefix is silence (the module simply never reaches `guestModules`), not an evaluation
 error, so double-check the prefix.
 
-*Note: `openclaude` is still vendored locally (`modules/_pkgs/openclaude.nix`) rather than
-pulled from an external upstream flake, for hermetic reliability.*
+*Note: `openclaude` is vendored locally (`modules/_pkgs/openclaude.nix`) rather than pulled
+from an external upstream flake, for hermetic reliability. That is a packaging detail only —
+`harness/openclaude.nix` is a harness module like any other, declaring its own packages and
+its own shares.*
 
 ## Secret Injection Architecture — as designed, not as built
 
