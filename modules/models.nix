@@ -84,7 +84,7 @@ in
     models
     ;
 
-  # ~/.pi/agent/models.json, as consumed by pi and by bv's builder and verifier.
+  # ~/.pi/agent/models.json, as consumed by pi.
   piModelsJson = (pkgs.formats.json { }).generate "pi-models.json" {
     inherit defaultThinkingLevel thinkingBudgets;
     providers.vllm-local = {

@@ -602,7 +602,6 @@ in
   claude = mkRunner vms.claude;
   opencode = mkRunner vms.opencode;
   pi = mkRunner vms.pi;
-  bv = mkRunner vms.bv;
   antigravity = mkRunner vms.antigravity;
   crush = mkRunner vms.crush;
   dsh = mkRunner vms.dsh;

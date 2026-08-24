@@ -1,5 +1,0 @@
-{
-  "webhookUrl": "http://replace-with-actual-webhook-url",
-  "commandListenerEnabled": true,
-  "commandListenerPort": 9876
-}

@@ -263,15 +263,14 @@ in
     # home-agent.mount. Without it, HM activation fails on mkdir ~/.cache.
     "d /home/agent 0700 agent users - -"
     "L+ /home/agent/.agents - - - - /mnt/persist/.agents"
-    # workspace is now a plain directory on the ephemeral home volume, not a host
-    # share — so BV_PROJECT_ROOT and orchestrator.ts keep resolving unchanged.
+    # workspace is a plain directory on the ephemeral home volume, not a host
+    # share: nothing an agent produces here reaches the host.
     "d /home/agent/workspace 0700 agent users - -"
     "d /home/agent/.ssh 0700 agent users - -"
     "d /home/agent/.config 0700 agent users - -"
     "d /home/agent/.local 0700 agent users - -"
     "d /home/agent/.local/share 0700 agent users - -"
     "d /home/agent/.local/share/nvim 0700 agent users - -"
-    "d /home/agent/.bv-logic 0700 agent users - -"
   ];
 
   environment = {
