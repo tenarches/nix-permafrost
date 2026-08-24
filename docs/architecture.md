@@ -6,13 +6,15 @@ Extended diagrams covering subsystems not shown in the [main README](../README.m
 
 ## Flake Input Graph
 
-All inputs pin `nixpkgs.follows` to a single `nixpkgs` instance, eliminating version drift across the entire dependency tree.
+All inputs pin `nixpkgs.follows` to a single `nixpkgs` instance, eliminating version drift across the entire dependency tree. `import-tree` is not a package or a build dependency — it drives `flake.nix` itself, discovering every `.nix` file under `modules/` rather than requiring each to be listed.
 
 ```mermaid
 graph LR
     NIXPKGS["nixpkgs<br/>(nixos-unstable)"]
+    IT["import-tree"]
 
     FP["flake-parts"] -->|structures| FLAKE["flake.nix"]
+    IT -->|"discovers modules/**/*.nix"| FLAKE
     NIXPKGS -->|follows| MVM["microvm.nix"]
     NIXPKGS -->|follows| LLM["llm-agents.nix"]
     NIXPKGS -->|follows| MCP["mcp-servers-nix"]
@@ -33,6 +35,7 @@ graph LR
     NIXPKGS -->|"base packages"| FLAKE
 
     style NIXPKGS fill:#4361ee,stroke:#3a0ca3,color:#fff,stroke-width:3px
+    style IT fill:#f77f00,stroke:#d62828,color:#fff,stroke-width:3px
     style FLAKE fill:#f72585,stroke:#b5179e,color:#fff,stroke-width:3px
     style MVM fill:#7209b7,stroke:#560bad,color:#fff
     style LLM fill:#7209b7,stroke:#560bad,color:#fff
@@ -42,70 +45,140 @@ graph LR
     style SOPS fill:#3a0ca3,stroke:#560bad,color:#fff
 ```
 
+The whole of `flake.nix` outside `inputs` is one line:
+`mkFlake { inherit inputs; } (inputs.import-tree ./modules)`. Nothing else is configured
+there — every `perSystem`, every `nixosConfiguration`, every package is contributed by a
+module file under `modules/`.
+
+Two nixpkgs instances exist, and only one follows the graph above.
+`nixpkgs-crosvm` is pinned to `nixos-25.05` deliberately, *not* an oversight: it exists
+solely to build an older `crosvm` whose vhost-user dialect still matches the
+Spectrum-patched `cloud-hypervisor` that `permafrost.gui` needs (see
+`modules/guest/launch-runner.nix` and `modules/_pkgs/crosvm-graphics.nix`).
+
 ---
 
 ## Module Composition
 
-The flake produces two output categories: **per-system packages** (the runner scripts you execute) and a **flake-wide NixOS configuration** (for deploying Permafrost as a full host).
+This is the section the dendritic move invalidates most. There is no single per-agent
+registry file left to loop over for either launch path. Every `.nix` file
+under `modules/` (excluding paths containing a `/_` segment — see below) is a flake-parts
+module contributing to `flake.modules.<class>.<name>`, a `lazyAttrsOf (lazyAttrsOf
+deferredModule)` declared once in `modules/flake/modules.nix` by importing
+`flake-parts.flakeModules.modules`. Every file's contribution merges into that namespace
+rather than colliding, and `_class` is stamped on each entry so a `homeManager` module
+cannot be imported into a NixOS configuration by accident.
 
 ```mermaid
 graph TD
-    FLAKE["flake.nix"]
+    TREE["modules/ (import-tree)"]
 
-    subgraph PER_SYSTEM["perSystem (x86_64-linux)"]
-        DEVSHELL["devShells.default<br/>sops + age + virtiofsd"]
-        FMT["formatter<br/>nixfmt"]
-        HOOKS["pre-commit hooks<br/>nixfmt, deadnix, statix"]
-        RUNNERS["packages.*<br/>(runners.nix)"]
+    subgraph SKIPPED["Skipped by import-tree — non-module files"]
+        LIB["modules/_lib/<br/>models.nix, shares.nix"]
+        PKGS["modules/_pkgs/<br/>runner.nix, tools.nix,<br/>openclaude.nix, crosvm-graphics.nix"]
     end
 
-    subgraph FLAKE_WIDE["flake (system-independent)"]
-        NIXOS_CFG["nixosConfigurations<br/>.permafrost"]
-        MODULES["nixosModules<br/>(reusable)"]
+    subgraph FLAKEINFRA["modules/flake/*.nix"]
+        MODOPT["modules.nix<br/>declares flake.modules.*"]
+        NPK["nixpkgs.nix<br/>overlays + perSystem pkgs"]
+        SYS["systems.nix<br/>[ x86_64-linux ]"]
+        DS["dev-shell.nix"]
+        FMT["formatter.nix"]
+        PC["pre-commit.nix"]
     end
 
-    FLAKE --> PER_SYSTEM
-    FLAKE --> FLAKE_WIDE
-
-    RUNNERS -->|"mkRunner<br/>per agent spec"| INV["inventory.nix<br/>(agent registry)"]
-
-    NIXOS_CFG --> HOST_MOD["host.nix<br/>bridge + NAT"]
-    NIXOS_CFG --> SEC_MOD["secrets.nix<br/>sops-nix + TPM"]
-    NIXOS_CFG --> AGT_MOD["agents.nix<br/>mkAgentVm loop"]
-    AGT_MOD --> INV
-
-    subgraph GUEST_MODULES["Guest VM Module Stack"]
-        AB["agent-base.nix<br/>hypervisor, filesystems,<br/>user, packages"]
-        AE["agent-environment.nix<br/>home-manager: tmux,<br/>uv, nodejs"]
-        NVIM["programs/nixvim.nix<br/>editor via nixvim"]
-        CRED["microvm-credential-fix.nix<br/>OEM string injection"]
+    subgraph GUESTMOD["flake.modules.nixos.guest-*"]
+        BASE["guest/base.nix<br/>hypervisor, volumes,<br/>user, packages"]
+        IDENT["guest/identity.nix<br/>permafrost.identity, permafrost.gui"]
+        SHARE["guest/shares.nix<br/>permafrost.shares option"]
+        HOMEC["guest/home.nix<br/>wires homeManager.agent-*"]
+        GFX["guest/graphics.nix<br/>wayland-proxy-virtwl"]
     end
 
-    AB --> AE
-    AE --> NVIM
-    AB --> CRED
+    subgraph HARNESSMOD["flake.modules.nixos.harness-*"]
+        CLAUDE["harness/claude.nix"]
+        OC["harness/opencode.nix"]
+        PI["harness/pi.nix"]
+        CRUSH["harness/crush.nix"]
+        DSH["harness/dsh.nix"]
+        AG["harness/antigravity.nix"]
+        MCP["harness/mcp.nix"]
+        BR["harness/browser.nix"]
+    end
 
-    MODULES -->|"agent-base"| AB
-    MODULES -->|"host-bridge"| HOST_MOD
+    LIST["guest/module-list.nix<br/>flake.lib.guestModules =<br/>filter by 'guest-'/'harness-' prefix"]
 
-    style FLAKE fill:#f72585,stroke:#b5179e,color:#fff,stroke-width:3px
-    style PER_SYSTEM fill:#4361ee22,stroke:#4361ee
-    style FLAKE_WIDE fill:#7209b722,stroke:#7209b7
-    style GUEST_MODULES fill:#06d6a022,stroke:#06d6a0
-    style INV fill:#f77f00,stroke:#d62828,color:#fff
+    subgraph LAUNCH["Exactly one per path — outside the naming convention"]
+        RUN["guest/launch-runner.nix<br/>flake.modules.nixos.launch-runner"]
+        FLT["guest/launch-fleet.nix<br/>flake.modules.nixos.launch-fleet"]
+    end
+
+    subgraph OUTPUTS["Consumers"]
+        GCFG["guest/configuration.nix<br/>nixosConfigurations.permafrost"]
+        HCFG["host/configuration.nix<br/>nixosConfigurations.permafrost-host"]
+        HFLEET["host/fleet.nix<br/>microvm.vms.permafrost"]
+        PKGOUT["packages/runner.nix, packages/tools.nix<br/>permafrost, default, status, gc, ssh-config"]
+    end
+
+    TREE --> FLAKEINFRA
+    TREE --> GUESTMOD
+    TREE --> HARNESSMOD
+    GUESTMOD --> LIST
+    HARNESSMOD --> LIST
+    LIST --> GCFG
+    LIST --> HFLEET
+    RUN --> GCFG
+    FLT --> HFLEET
+    GCFG --> PKGOUT
+    HCFG --> HFLEET
+
+    style TREE fill:#f72585,stroke:#b5179e,color:#fff,stroke-width:3px
+    style SKIPPED fill:#d6282822,stroke:#d62828
+    style LIST fill:#f77f00,stroke:#d62828,color:#fff,stroke-width:3px
+    style GUESTMOD fill:#06d6a022,stroke:#06d6a0
+    style HARNESSMOD fill:#4361ee22,stroke:#4361ee
+    style LAUNCH fill:#7209b722,stroke:#7209b7
 ```
+
+**The `_lib` / `_pkgs` convention.** `import-tree` skips any path containing a `/_` segment,
+so `modules/_lib/` and `modules/_pkgs/` are where plain Nix files live — functions and
+derivations imported directly by the modules that need them, rather than flake-parts
+modules themselves. `modules/_lib/shares.nix` is the virtiofs tag-hashing function shared
+by both launch paths and the runner script; `modules/_lib/models.nix` is the one inference
+catalogue rendered into both pi's `models.json` and dsh's `llm-pi-ai` provider profile;
+`modules/_pkgs/runner.nix` and `modules/_pkgs/tools.nix` build the actual packages
+(`permafrost`, `status`, `gc`, `ssh-config`) consumed by `modules/packages/*.nix`.
+
+**Naming is the registry.** `modules/guest/module-list.nix` computes
+`flake.lib.guestModules` by filtering `config.flake.modules.nixos` for names starting with
+`guest-` or `harness-` — there is no list to keep in sync by hand. Both launch paths
+(`modules/guest/configuration.nix` for `nix run`, `modules/host/fleet.nix` for the
+declarative unit) consume that one list plus their own `launch-*` module, which is what
+keeps the guest identical however it is started. Adding a harness or a guest-wide concern is
+adding a file; the failure mode of getting the prefix wrong is silence, not an error — a
+misnamed module simply never reaches `guestModules`.
+
+**Two nixosConfigurations, not one.** `flake.nixosConfigurations.permafrost` is the guest
+itself, built from `guestModules ++ [ nixpkgs, launch-runner ]` so `nix flake check`
+evaluates it and the runner script can read its merged share list back out rather than being
+handed a copy. `flake.nixosConfigurations.permafrost-host` is a thin configuration — bridge,
+secrets, the fleet unit — that exists to hold those concerns and give `nix flake check`
+something to evaluate them against; it is not a real workstation configuration. The two
+machines needed different hostnames because they share the same `microbr` bridge, hence
+`permafrost-host` rather than `permafrost` for the host.
 
 ---
 
 ## Network Architecture
 
-Each guest gets a `tap` interface bridged to `microbr`. The host performs NAT to route guest traffic to the internet. `cloud-hypervisor` does not support user-mode SLIRP, which is why `sudo` is required — the host must create and configure TAP devices.
+One guest, one address. `cloud-hypervisor` does not support user-mode SLIRP, which is why
+`sudo` is required — the host must create and configure the tap device.
 
 ```mermaid
 graph TB
     INET["Internet"]
 
-    subgraph HOST["Host"]
+    subgraph HOST["Host (permafrost-host)"]
         EXT["External NIC<br/>(wlp4s0)"]
         IPTABLES["iptables NAT<br/>MASQUERADE<br/>192.168.33.0/24"]
         FWD["ip_forward = 1"]
@@ -116,20 +189,36 @@ graph TB
 
     INET <-->|"routed traffic"| EXT
 
-    subgraph GUESTS["Guest VMs (one per inventory spec)"]
-        TAP_N["tap: microvm-(name)"] --> VM_N["Agent VM<br/>192.168.33.x/24<br/>gw .33.1"]
+    subgraph GUEST["Guest VM"]
+        TAP["tap: microvm-pf"] --> VM["permafrost<br/>192.168.33.10/24<br/>gw .33.1<br/>vsock CID 10"]
     end
 
-    BRIDGE --- TAP_N
+    BRIDGE --- TAP
 
-    DNS["DNS servers<br/>(per agent-base.nix)"]
-    VM_N -.->|resolv| DNS
+    DNS["10.0.7.15, 10.0.7.16<br/>(internal resolvers, no public fallback —<br/>see guest/identity.nix)"]
+    VM -.->|resolv| DNS
 
     style HOST fill:#0f3460,stroke:#16213e,color:#fff
     style BRIDGE fill:#4361ee,stroke:#3a0ca3,color:#fff,stroke-width:3px
-    style GUESTS fill:#1a1a2e22,stroke:#e94560
+    style GUEST fill:#1a1a2e22,stroke:#e94560
     style INET fill:#06d6a0,color:#000,stroke-width:3px
 ```
+
+The six-guest fleet this replaced — `claude` (.10), `antigravity` (.12), `opencode` (.13),
+`pi` (.14), `crush` (.15), `dsh` (.17) — diverged in almost nothing: the same five MCP
+servers, the same Playwright, the same base guest configuration, the same user and network
+shape. The collapse to one guest frees five of those addresses. `192.168.33.10` was
+`claude`'s before the collapse and is now simply `permafrost`'s — coincidence, not a
+deliberate renumbering.
+
+A bug in the tap-naming was fixed as part of this collapse. The host's bridge network
+(`modules/host/bridge.nix`) matches `matchConfig.Name = "microvm*"` to attach a tap to
+`microbr`. The old fleet path (declarative `microvm.vms`) built its tap as `vm-<tapId>` — a
+prefix that never matches `microvm*`, so a fleet-launched guest's tap was created and then
+never bridged in; only the JIT runner path had it right. `guest/identity.nix`'s `tapId`
+option and `guest/base.nix`'s `microvm.interfaces` now construct the tap as
+`microvm-${tapId}` unconditionally for both launch paths, so a fleet-started guest's tap is
+now actually attached.
 
 ---
 
@@ -137,7 +226,7 @@ graph TB
 
 Every writable path in the guest is a sparse disk image on the host, destroyed and recreated
 on every boot. Only `/` remains RAM-backed. All four volumes are declared in one place,
-`modules/agent-base.nix`.
+`modules/guest/base.nix`.
 
 | # | Image | Mount | Filesystem | Size | Device |
 |---|---|---|---|---|---|
@@ -194,41 +283,41 @@ workspace share. Images are sparse, so a booted VM occupies under 1 MiB of host 
 
 ### Image lifecycle
 
-Images live at `/var/lib/permafrost/<agent>/`, keyed on the guest's `hostName`, which
-`inventory.nix` keeps unique — so different agents never collide.
+Images live at `/var/lib/permafrost/permafrost/`, keyed on the guest's `hostName`
+(`permafrost.identity.name`, `modules/guest/identity.nix`).
 
 1. **`microvm.preStart`** wipes `*.img` before `createVolumesScript` recreates them. This
-   runs on both launch paths (`nix run .#<agent>` and declarative `microvm.vms`), so nothing
-   an agent writes crosses a boot.
+   runs on both launch paths (`nix run .#permafrost` and declarative `microvm.vms`), so
+   nothing an agent writes crosses a boot.
 2. **`ExecStopPost`** on the systemd unit removes the whole directory whenever the unit
    stops — clean exit, crash, or `SIGKILL`. It replaced a shell `cleanup()` trap, which only
    fired in `run` mode and never on kill or power loss.
 3. **`flock`** is taken before the `systemctl is-active` check, which is otherwise TOCTOU
    racy: two concurrent launches could both pass it and race the `preStart` wipe.
-4. **`nix run .#gc`** reclaims directories whose unit is not active. `preStart` bounds live
-   agents to one stale image set each, but an agent *deleted from `inventory.nix`* leaves a
-   directory nothing else will ever clean — the only unbounded source of orphans.
+4. **`nix run .#gc`** reclaims directories whose unit is not active. `preStart` bounds a live
+   guest to one stale image set, but a guest *renamed or deleted from the module tree* leaves
+   a directory nothing else will ever clean — the only unbounded source of orphans, now that
+   there is only one guest to leave behind.
 
 ### Discovery
 
-`nix run .#status` prints every agent with its IP, vsock CID, tap device and live unit state.
+`nix run .#status` prints the guest with its IP, vsock CID, tap device and live unit state.
 
 ```
-AGENT         IP               CID   TAP                STATE
-claude        192.168.33.10    10    microvm-claude     active
-bv            192.168.33.16    16    microvm-bv         inactive
+GUEST         IP               CID   TAP                STATE
+permafrost    192.168.33.10    10    microvm-pf         active
 ```
 
 `machinectl` is not usable for this. microvm.nix's `lib/runner.nix` notes that NSS resolution
 works for containers but not VMs, because machined's `GetAddresses` needs container namespaces
-to enumerate IPs — it would list the VMs without their addresses. Addresses are static in
-`inventory.nix`, so the table is generated from there and joined with systemd unit state.
+to enumerate IPs — it would list the VM without its address. The address is static in
+`permafrost.identity`, so the row is read straight from the guest's own configuration.
 
 ---
 
 ## Overlay & Package Pipeline
 
-The Python MCP overlay fixes upstream build issues and feeds into the MCP server package set. The overlay ordering matters — `python-mcp.nix` must apply before `mcp-servers-nix.overlays.default` so the patched Python packages are visible when MCP server derivations are evaluated.
+The Python MCP overlay fixes upstream build issues and feeds into the MCP server package set. The overlay ordering matters — `overlays/python-mcp.nix` must apply before `mcp-servers-nix.overlays.default` so the patched Python packages are visible when MCP server derivations are evaluated. Both are applied once, in `modules/flake/nixpkgs.nix`, to the one `pkgs` instance every `perSystem` and the guest itself share.
 
 ```mermaid
 graph LR
@@ -242,39 +331,45 @@ graph LR
 
     MCP_OV --> PKGS["Available MCP Packages"]
 
-    PKGS --> INV["inventory.nix<br/>(per-agent extraPackages)"]
+    PKGS --> HARNESS["modules/harness/mcp.nix<br/>+ harness/dsh.nix's plugin rows"]
 
     style OVERLAYS fill:#7209b722,stroke:#7209b7
     style NIXPKGS fill:#4361ee,stroke:#3a0ca3,color:#fff
-    style INV fill:#f77f00,stroke:#d62828,color:#fff
+    style HARNESS fill:#f77f00,stroke:#d62828,color:#fff
 ```
+
+A third overlay pair, `overlays/cloud-hypervisor-graphics.nix`, is applied conditionally —
+only when `permafrost.gui = true` — from `modules/guest/launch-runner.nix`, since it pins
+`cloud-hypervisor` itself to a source build and would otherwise force every launch to build
+it from scratch instead of taking nixpkgs's cached binary.
 
 ---
 
 ## GUI Passthrough
 
 The default transport is **waypipe over SSH**, which involves none of the machinery
-below: `waypipe --no-gpu ssh -t agent@<ip> bash -l` proxies the Wayland protocol over the SSH
-connection, needing only the binary on both ends. It is installed on the host and
-on every guest.
+below: `waypipe --no-gpu ssh -t agent@192.168.33.10 bash -l` proxies the Wayland protocol over the SSH
+connection, needing only the binary on both ends. It is installed on the host
+(`modules/host/bridge.nix`) and on the guest (`modules/guest/base.nix`), unconditionally.
 
 What is *not* possible is sharing the host's Wayland socket over virtiofs: virtiofs
 exports an `AF_UNIX` socket as an inode but has no socket proxying, so a guest
 `connect()` on it can never reach the host listener.
 
-The second path, `gui = true` in `modules/inventory.nix` (off by default, see
-`docs/usage.md` for why), uses virtio-gpu. microvm.nix's cloud-hypervisor
+The second path, `permafrost.gui = true` in `modules/guest/identity.nix` (off by default,
+see `docs/usage.md` for why), uses virtio-gpu. microvm.nix's cloud-hypervisor
 `preStart` runs `crosvm device gpu` on the
 host — itself an ordinary Wayland client of the invoking session's compositor —
 and hands the VM a vhost-user GPU device. In the guest, `wayland-proxy-virtwl`
-runs as a systemd **user** service, allocating buffers from `/dev/dri/renderD128`
+(`modules/guest/graphics.nix`) runs as a systemd **user** service, allocating buffers from `/dev/dri/renderD128`
 (provided by `virtio_gpu`, so no `/dev/dri` passthrough is needed) and serving
 `/run/user/1000/wayland-1`. Being a user service, it is reachable from any later
 session, which is what makes GUI-over-SSH work.
 
-This requires a live compositor in the launching session, so GUI guests only work
-through the JIT runners (`nix run .#claude`), never through the declarative
-`microvm.vms` path. Rendering is Mesa llvmpipe; no hardware GPU is exposed.
+This requires a live compositor in the launching session, so GUI is only reachable through
+the JIT runner (`nix run .#permafrost`), never through the declarative
+`microvm.vms` path — `modules/guest/launch-fleet.nix` deliberately ignores
+`permafrost.gui` because a system unit has no compositor to attach to. Rendering is Mesa llvmpipe; no hardware GPU is exposed.
 
 ```mermaid
 graph LR
@@ -283,7 +378,7 @@ graph LR
         CROSVM["crosvm device gpu<br/>(vhost-user, gpu.sock)"]
     end
 
-    subgraph GUEST["GUI-enabled VM"]
+    subgraph GUEST["permafrost, launched with gui = true"]
         VGPU["virtio_gpu<br/>/dev/dri/renderD128"]
         PROXY["wayland-proxy-virtwl<br/>(systemd user service)"]
         G_WL["/run/user/1000/<br/>wayland-1 + Xwayland :0"]
@@ -307,87 +402,50 @@ crosvm, or patched hypervisor is involved on either side.
 
 ---
 
----
-
-## Builder-Verifier Architecture
-
-The Builder-Verifier (BV) system uses a dual-agent model to automate the "Trust but Verify" workflow. It separates the creative task of code generation from the analytical task of auditing.
-
-### System Components
-
-```mermaid
-graph TD
-    subgraph GUEST["BV MicroVM"]
-        ORCH["Orchestrator<br/>(Node.js SDK)"]
-        BUILDER["Builder Agent<br/>(Gemini 2.5)"]
-        VERIFIER["Verifier Agent<br/>(Qwen 3.6 35B)"]
-        SESSIONS["Session Logs<br/>(JSONL)"]
-    end
-
-    subgraph HOST["Inference Host (dualie)"]
-        LLAMA["inference server<br/>(:8000)"]
-    end
-
-    ORCH -->|drive| BUILDER
-    ORCH -->|drive| VERIFIER
-    BUILDER -->|log| SESSIONS
-    VERIFIER -->|audit| SESSIONS
-    VERIFIER -->|inference| LLAMA
-
-    style GUEST fill:#1a1a2e22,stroke:#e94560
-    style LLAMA fill:#4361ee,stroke:#3a0ca3,color:#fff
-```
-
-### The Verification Loop
-
-The orchestrator enforces a strict state machine to ensure quality and security:
-
-1.  **Prime:** Builder loads project context using the `prime` skill.
-2.  **Build:** Builder implements the task and provides a "Completion Summary" with atomic claims.
-3.  **Lint:** Orchestrator runs deterministic checks (`tsc`, `eslint`) in the workspace.
-4.  **Verify:** Verifier reads the full Builder session log and validates each atomic claim against tool outputs.
-5.  **Feedback:** If verification or linting fails, the Orchestrator provides feedback to the Builder for a retry (max 2 rounds).
-
-### Key Architectural Patterns
-
-- **Declarative Orchestration:** The entire orchestrator, agent instructions, and security extensions are managed declaratively via Nix. This ensures that the agent's "personality" and reasoning logic are versioned alongside the code.
-- **Bash Lockdown:** The builder operates under a strict command allowlist (`bash-lockdown.ts`) to prevent unauthorized system modifications.
-- **Read-Only Verification:** The verifier is architecturally restricted from modifying files or executing bash, ensuring its audit is strictly analytical.
-- **Local Inference:** The Verifier uses the local inference endpoint (`petunia.home.lan:8000`) for data residency and specialized reasoning performance.
-- **Completion Summaries:** The system relies on "Atomic Claims" — verifiable statements made by the builder that the verifier must prove or disprove based on session evidence.
-
----
-
 ## Dual Execution Modes
 
-The same `inventory.nix` spec powers two different execution paths. **Standalone mode** (`nix run`) is for developers running agents on any NixOS machine. **Fleet mode** (`nixosConfigurations.permafrost`) is for deploying a dedicated multi-agent host.
+The same set of `flake.lib.guestModules` powers two different execution paths, so a guest is
+identical however it was started — only the launch module and the shares it can populate
+differ. **Runner mode** (`nix run .#permafrost`) is for a developer running the guest on any
+NixOS machine. **Fleet mode** (`nixosConfigurations.permafrost-host`, `microvm.vms.permafrost`)
+is for deploying a dedicated host that starts the guest as a persistent systemd service.
 
 ```mermaid
 graph TD
-    INV["inventory.nix<br/>(single source of truth)"]
+    LIST["module-list.nix<br/>flake.lib.guestModules<br/>(guest-* and harness-* modules)"]
 
-    subgraph STANDALONE["Standalone Mode: nix run .#(name)"]
-        RUN["runners.nix<br/>mkRunner"]
-        SCRIPT["Shell script per agent"]
-        JIT["JIT bridge + NAT + virtiofsd"]
+    subgraph RUNNERMODE["Runner Mode: nix run .#permafrost"]
+        RUN["guest/launch-runner.nix<br/>flake.modules.nixos.launch-runner"]
+        GCFG["guest/configuration.nix<br/>nixosConfigurations.permafrost"]
+        SCRIPT["_pkgs/runner.nix<br/>writeShellScriptBin"]
+        JIT["JIT bridge + NAT + virtiofsd<br/>+ ssh keys harvested from the agent"]
         SD_RUN["systemd-run transient unit"]
         CHV1["cloud-hypervisor"]
     end
 
-    subgraph FLEET["Fleet Mode: nixosConfigurations.permafrost"]
-        AGENTS["agents.nix<br/>mkAgentVm"]
-        MVM_VMS["microvm.vms.<name>"]
-        HOST_SVC["Persistent systemd services"]
+    subgraph FLEETMODE["Fleet Mode: nixosConfigurations.permafrost-host"]
+        FLT["guest/launch-fleet.nix<br/>flake.modules.nixos.launch-fleet"]
+        HFLEET["host/fleet.nix<br/>microvm.vms.permafrost"]
+        HOST_SVC["microvm-permafrost.service<br/>(persistent, no ssh-key harvest)"]
         CHV2["cloud-hypervisor"]
     end
 
-    INV --> RUN
-    INV --> AGENTS
+    LIST --> GCFG
+    LIST --> HFLEET
+    RUN --> GCFG --> SCRIPT --> JIT --> SD_RUN --> CHV1
+    FLT --> HFLEET --> HOST_SVC --> CHV2
 
-    RUN --> SCRIPT --> JIT --> SD_RUN --> CHV1
-    AGENTS --> MVM_VMS --> HOST_SVC --> CHV2
-
-    style INV fill:#f77f00,stroke:#d62828,color:#fff,stroke-width:3px
-    style STANDALONE fill:#4361ee22,stroke:#4361ee
-    style FLEET fill:#7209b722,stroke:#7209b7
+    style LIST fill:#f77f00,stroke:#d62828,color:#fff,stroke-width:3px
+    style RUNNERMODE fill:#4361ee22,stroke:#4361ee
+    style FLEETMODE fill:#7209b722,stroke:#7209b7
 ```
+
+The two paths differ in exactly what each `launch-*` module contributes: `launch-runner.nix`
+spins up a virtiofsd per share against sockets in a systemd `RuntimeDirectory` and,
+runner-only, harvests ssh public keys from the launching user's agent into a share of their
+own; `launch-fleet.nix` runs virtiofsd on the host itself and shares real host paths, with no
+ssh-key share at all — a fleet-started guest is reachable only over the serial console unless
+something else puts a key in `~agent/.ssh/authorized_keys`. `permafrost.gui` is silently
+ignored by the fleet path for the reason given under GUI Passthrough above. The tap-prefix
+fix described under Network Architecture applies to both paths identically, since both build
+their tap from the same `permafrost.identity.tapId` option.
