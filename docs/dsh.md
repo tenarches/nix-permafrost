@@ -23,6 +23,7 @@ What is set up for you:
 | Reasoning | **medium** by default (the models' own default is `xhigh`) |
 | MCP servers | context7, time, nixos, terraform — running, no setup |
 | Skills | seven curated skills, pre-installed and editable |
+| Browser | `playwright` on `PATH`, chromium/firefox/webkit already built |
 | Sandbox | **off** — see [§8](#8-the-permission-posture) before you get comfortable |
 
 ---
@@ -320,6 +321,15 @@ Restart the profile. Its tools appear as `mcp__example__<toolname>`.
 
 To make it permanent, add it to the `mcpServers` list in `modules/dsh.nix` — that renders
 the same row with a store path for `command`, so it does not depend on `PATH`.
+
+**A note on stderr.** An MCP server is a child process and inherits the terminal's stderr,
+so anything it logs there lands in your session, interleaved with dsh's own output. That
+is where the terraform server's `failed to create TFE client` complaint came from: it
+reaches for an HCP Terraform client whether or not one is configured, no token reaches
+this guest, and the nine registry tools work regardless. It is silenced with
+`--log-level fatal` rather than fixed, because there was nothing broken to fix. Expect the
+same from any server you add that is chatty on stderr — and if a server hangs at startup
+instead, check stderr first, since that is where it will say why.
 
 **GitHub.** `github-mcp-server` is installed but deliberately not mounted: it exits at
 startup unless `GITHUB_PERSONAL_ACCESS_TOKEN` is set, and no token reaches this guest. To
