@@ -134,13 +134,13 @@ The guest runs `sshd` and is reachable from the host at `agent@192.168.33.10`.
 
 The guest accepts keys only — `PasswordAuthentication` is off — and authorized keys are collected **at launch time**, not baked into the image. The runner writes them to a host directory that is virtiofs-mounted at `/etc/ssh/authorized_keys.d/` in the guest, for both `agent` and `root`. Two sources, and they combine:
 
-1. **Your SSH agent.** The runner shells out to `ssh-add -L`, so launch with `sudo -E` to keep `SSH_AUTH_SOCK`:
+1. **Your SSH agent.** The runner shells out to `ssh-add -L`. Plain `sudo` is enough:
    ```bash
-   sudo -E nix run .#permafrost
+   sudo nix run .#permafrost
    ```
-   If you forget `-E`, the runner probes `/run/user/$(id -u $SUDO_USER)` for an agent socket and prints what it found — but `-E` is the reliable path.
+   `sudo` clears `SSH_AUTH_SOCK`, so the runner probes `/run/user/$(id -u $SUDO_USER)` for an agent socket and prints which one it found. `sudo -E` preserves the variable instead and skips the probe; both work.
 
-   **Which agent you launch from decides who can log in.** Hosts running TPM-sealed keys keep two separate agents: the personal one at `ssh-tpm-agent.sock`, and a permafrost one at `permafrost-agent.sock` holding only the agentic key. Launch from a session on the **personal** agent — that is the key you interactively log in with. The probe above only ever selects the personal agent, and the runner warns if `SSH_AUTH_SOCK` was inherited pointing at the permafrost one, because that enrols the agentic key instead and your login will be rejected.
+   **Which agent you launch from decides who can log in**, and on a two-agent host the probe is the safer of the two. Hosts running TPM-sealed keys keep the personal agent at `ssh-tpm-agent.sock` and a permafrost one at `permafrost-agent.sock` holding only the agentic key, which is not enrolled for interactive login. The probe matches socket names exactly and only ever selects the personal agent — deliberately never `permafrost-agent.sock`, since a wildcard there would enrol the agentic key for interactive login and for root, inverting the split the two agents exist to provide. `sudo -E` carries in whatever your session happens to hold, so it can hand the runner the permafrost agent and leave your own login rejected; the runner warns when it sees that.
 2. **`AGENT_PUBKEYS`.** Any keys in that environment variable are appended, one per line. Use this when there is no agent to read:
    ```bash
    sudo AGENT_PUBKEYS="$(cat ~/.ssh/id_ed25519.pub)" nix run .#permafrost
@@ -257,12 +257,14 @@ These cannot be set globally from the guest configuration: Chromium reads no gen
 Setting `permafrost.gui = true` additionally enables `microvm.graphics`. On the host, microvm.nix starts a `crosvm device gpu` bridged to the invoking session's compositor; in the guest, `wayland-proxy-virtwl` runs as a systemd **user** service serving `/run/user/1000/wayland-1`. Because it is a user service, any session opened later can reach it:
 
 ```bash
-sudo -E nix run .#permafrost   # -E: the runner needs XDG_RUNTIME_DIR and WAYLAND_DISPLAY
+sudo -E nix run .#permafrost   # -E is required here, and only here — see below
 ssh agent@192.168.33.10
 <electron-app>                 # WAYLAND_DISPLAY=wayland-1 is already set
 ```
 
 X11 clients work too: the proxy runs `--x-display=0`, so `DISPLAY=:0` reaches an Xwayland server *inside the guest*. Nothing needs X11 on the host, and sshd needs no `X11Forwarding`.
+
+**`-E` belongs to this path alone.** microvm.nix's preStart runs `crosvm device gpu --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` verbatim under a root systemd unit, so both variables have to survive `sudo`. With `permafrost.gui = false` nothing consumes them — the compositor preflight below is emitted into the runner script only under `gui = true`, and the default launch neither needs a compositor nor cares whether those variables are set. Launch the default guest with plain `sudo`.
 
 The runner preflights for a compositor and exits with an explanation if there is none — without that check, microvm.nix's preStart backgrounds `crosvm device gpu` and then spins in `while ! [ -S gpu.sock ]`, which never terminates when crosvm has nothing to attach to. The declarative fleet path cannot serve GUI at all, since its systemd unit has no session compositor.
 
