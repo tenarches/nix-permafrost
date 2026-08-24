@@ -215,10 +215,13 @@
           "nix-command"
           "flakes"
         ];
-        trusted-users = [
-          "root"
-          "agent"
-        ];
+        # root only. A nix trusted user is root-equivalent by construction —
+        # the daemon runs as root and honours per-invocation `substituters`,
+        # `post-build-hook`, `sandbox = false` and friends from anyone on this
+        # list. Leaving `agent` here would have made removing sudo below
+        # decorative. Ordinary `nix build`/`develop`/`run` against the
+        # substituters declared here are unaffected.
+        trusted-users = [ "root" ];
         substituters = [
           "https://cache.nixos.org/"
           "https://devenv.cachix.org"
@@ -229,24 +232,56 @@
         ];
       };
 
-      # Agent user configuration
-      users.mutableUsers = false;
-      users.users.agent = {
-        isNormalUser = true;
-        uid = 1000;
-        home = "/home/agent";
-        hashedPassword = ""; # No password
-        extraGroups = [
-          "wheel"
-          "video"
-          "render"
-          "users"
-          "systemd-journal"
-        ]; # For sudo, GPU, and logs
+      # Agent user configuration.
+      #
+      # The agent has no route to root in the guest. That is the point of the
+      # three settings below plus `trusted-users` above: the VM is the
+      # isolation boundary, and an agent that can become root inside it can
+      # read anything delivered to any service in it — the dsh TLS key, the
+      # forwarded agent socket, every harness credential.
+      users = {
+        mutableUsers = false;
+
+        # The assertion this waives is "neither the root account nor any wheel
+        # user has a password or SSH authorized key", and it is accurate:
+        # after the settings here, nothing does. That is the intended shape
+        # rather than an accident. Interactive access is the serial console,
+        # which autologins as the agent, and ssh as the agent with the
+        # launching user's harvested keys. Root is reachable only by
+        # certificate, and only when a CA has been configured — see
+        # modules/guest/ssh-ca.nix.
+        #
+        # Being locked out costs nothing here that it would cost on a real
+        # machine: the guest is rebuilt from scratch on every boot, so the
+        # recovery for a guest you cannot log into is to stop it and launch
+        # again.
+        allowNoPasswordLogin = true;
+
+        users.agent = {
+          isNormalUser = true;
+          uid = 1000;
+          home = "/home/agent";
+
+          # Locked, not empty. "" is a valid empty password that `su` accepts;
+          # only "!" refuses. Removing sudo while leaving this would have moved
+          # the door rather than closed it.
+          hashedPassword = "!";
+
+          # No wheel. video/render are the GPU, systemd-journal is log access,
+          # and both survive independently of sudo.
+          extraGroups = [
+            "video"
+            "render"
+            "users"
+            "systemd-journal"
+          ];
+        };
       };
 
-      # Enable passwordless sudo for the wheel group
-      security.sudo.wheelNeedsPassword = false;
+      # Removes the setuid wrapper, not merely the rule — the whole module is
+      # gated on this. `su` comes from shadow and is wrapped separately, which
+      # is why the password above has to be locked in the same breath.
+      security.sudo.enable = false;
 
       # ~/.agents is the one share that is not a harness's own: the skills and
       # instructions every harness reads.

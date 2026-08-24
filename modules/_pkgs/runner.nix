@@ -108,14 +108,17 @@ pkgs.writeShellScriptBin identity.name ''
       ;;
   esac
 
-  # Extract keys for both agent and root
+  # For the agent user only. Enrolling these for root as well used to be the
+  # convenience path, and it was also a way back to root from inside the
+  # guest: the forwarded agent can reach sshd on localhost, so a bare key in
+  # root's authorized_keys made `ssh root@localhost` an escalation. Root now
+  # authenticates by certificate instead — see modules/guest/ssh-ca.nix — and
+  # a certificate is not something the guest can mint for itself.
   if [ -n "$SSH_AUTH_SOCK" ]; then
     ssh-add -L > "$SSH_KEYS_DIR/agent" 2>/dev/null || true
-    cp "$SSH_KEYS_DIR/agent" "$SSH_KEYS_DIR/root" || true
   fi
   if [ -n "$AGENT_PUBKEYS" ]; then
     echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/agent"
-    echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/root"
   fi
   chmod 644 "$SSH_KEYS_DIR"/* || true
 
