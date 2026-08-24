@@ -8,7 +8,7 @@ disposable virtual machine.
 The whole fleet is one guest, `permafrost`, carrying every harness at once: Claude Code,
 openclaude, opencode, pi (plus mcporter), crush, dsh, antigravity-cli, five MCP
 servers, and Playwright. There is one runner, one address, one ssh alias — see
-[Harness Modules](#harness-modules) for why adding a new agent is now adding one file.
+[Harness Modules](#harness-modules) for why adding a new agent means adding one file.
 
 ---
 
@@ -109,7 +109,7 @@ graph TB
 
 ## Harness Modules
 
-There is no central agent registry anymore. Every `.nix` file under `modules/` is discovered
+There is no central agent registry. Every `.nix` file under `modules/` is discovered
 by `import-tree` and contributes to the `flake.modules.<class>.<name>` namespace (the
 [dendritic pattern](https://github.com/mightyiam/dendritic)). A harness is one file under
 `modules/harness/` declaring `flake.modules.nixos.harness-<name>`, with its own

@@ -47,9 +47,9 @@ nix run .#status                   # is it up, and at what address
 sudo nix run .#permafrost stop
 ```
 
-There is one runner rather than one per agent — the old per-agent names (`.#claude`,
-`.#dsh`, and so on) no longer exist and were not kept as aliases, since each would have
-booted the same guest under a name that no longer distinguishes anything.
+There is one runner rather than one per agent: per-agent names such as `.#claude` or
+`.#dsh` are not kept as aliases, since each would boot the same guest under a name that
+distinguishes nothing.
 
 ## Filesystem and Persistence
 
@@ -212,7 +212,8 @@ W=$(readlink -f "$(command -v waypipe)")
 "$W" --remote-bin "$W" --no-gpu ssh -t agent@192.168.33.10 bash -l
 ```
 
-That same trick reaches a guest whose configuration predates `waypipe` being installed.
+That same trick reaches a guest still running an older store closure than the host's
+current config, mismatched `waypipe` version included.
 
 Upstream's `run-waypipe` wrapper (vsock, `-s 2:6000`) is *not* usable as-is here: cloud-hypervisor multiplexes guest vsock ports onto `<socket>_<port>` UNIX sockets on the host, so a host-side `waypipe --vsock` client cannot bind `AF_VSOCK` directly. Use the SSH transport above.
 

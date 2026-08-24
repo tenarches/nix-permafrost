@@ -145,9 +145,8 @@ Neither opens a browser — there isn't one in the guest.
 ## 5. Switching models
 
 The catalogue lives in **`modules/_lib/models.nix`**, on the host, and is shared with `pi` —
-which used to mean two separate agent VMs reading the same file, and now, with `dsh` and
-`pi` both harnesses in the one `permafrost` guest, just means two config files rendered from
-one source inside the same VM. Three models are declared:
+both harnesses read the one source and render it into two config files inside the same
+`permafrost` guest. Three models are declared:
 
 ```
 qwen3.6-27b

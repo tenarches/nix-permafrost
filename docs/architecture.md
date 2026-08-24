@@ -60,8 +60,8 @@ Spectrum-patched `cloud-hypervisor` that `permafrost.gui` needs (see
 
 ## Module Composition
 
-This is the section the dendritic move invalidates most. There is no single per-agent
-registry file left to loop over for either launch path. Every `.nix` file
+There is no central per-agent registry file for either launch path to loop over — naming
+is the registry (see below). Every `.nix` file
 under `modules/` (excluding paths containing a `/_` segment — see below) is a flake-parts
 module contributing to `flake.modules.<class>.<name>`, a `lazyAttrsOf (lazyAttrsOf
 deferredModule)` declared once in `modules/flake/modules.nix` by importing
@@ -204,21 +204,11 @@ graph TB
     style INET fill:#06d6a0,color:#000,stroke-width:3px
 ```
 
-The six-guest fleet this replaced — `claude` (.10), `antigravity` (.12), `opencode` (.13),
-`pi` (.14), `crush` (.15), `dsh` (.17) — diverged in almost nothing: the same five MCP
-servers, the same Playwright, the same base guest configuration, the same user and network
-shape. The collapse to one guest frees five of those addresses. `192.168.33.10` was
-`claude`'s before the collapse and is now simply `permafrost`'s — coincidence, not a
-deliberate renumbering.
-
-A bug in the tap-naming was fixed as part of this collapse. The host's bridge network
-(`modules/host/bridge.nix`) matches `matchConfig.Name = "microvm*"` to attach a tap to
-`microbr`. The old fleet path (declarative `microvm.vms`) built its tap as `vm-<tapId>` — a
-prefix that never matches `microvm*`, so a fleet-launched guest's tap was created and then
-never bridged in; only the JIT runner path had it right. `guest/identity.nix`'s `tapId`
-option and `guest/base.nix`'s `microvm.interfaces` now construct the tap as
-`microvm-${tapId}` unconditionally for both launch paths, so a fleet-started guest's tap is
-now actually attached.
+The host's bridge network (`modules/host/bridge.nix`) matches `matchConfig.Name =
+"microvm*"` to attach a tap to `microbr`. The `microvm-` prefix is not optional:
+`guest/identity.nix`'s `tapId` option and `guest/base.nix`'s `microvm.interfaces` construct
+the tap as `microvm-${tapId}` for both launch paths, so a tap named anything else would be
+created and then never bridged in.
 
 ---
 
@@ -241,11 +231,12 @@ no offset and letters follow list order. The swap letter is **derived** via micr
 
 ### Why this shape
 
-**The tmpfs bug it replaces.** `/nix/.rw-store` and `/home/agent` were previously tmpfs with
-`size=20G` and `size=8192M` on an 8 GiB VM — 32 GiB of caps against 8 GiB of RAM, with no
-swap. Both caps were unreachable, and `nix run` exhausted memory and failed with ENOSPC well
-below any declared limit. The overlay *lowerdir* (host `/nix/store` over virtiofs) was always
-fine; only the upperdir was misplaced.
+**Why not tmpfs.** A tmpfs `/nix/.rw-store` (`size=20G`) plus a tmpfs `/home/agent`
+(`size=8192M`) cap out at 32 GiB against an 8 GiB VM's RAM, with no swap — both caps
+unreachable, so `nix run` exhausts memory and fails with ENOSPC well below either declared
+limit. Disk-backed volumes carry no such ceiling. The overlay *lowerdir* (host `/nix/store`
+over virtiofs) never touches guest RAM either way; it is only the *upperdir* that needs to
+avoid tmpfs.
 
 **Per-volume filesystems are deliberate, not uniform.**
 
@@ -290,14 +281,15 @@ Images live at `/var/lib/permafrost/permafrost/`, keyed on the guest's `hostName
    runs on both launch paths (`nix run .#permafrost` and declarative `microvm.vms`), so
    nothing an agent writes crosses a boot.
 2. **`ExecStopPost`** on the systemd unit removes the whole directory whenever the unit
-   stops — clean exit, crash, or `SIGKILL`. It replaced a shell `cleanup()` trap, which only
-   fired in `run` mode and never on kill or power loss.
+   stops — clean exit, crash, or `SIGKILL` — in both `run` and `start` modes. A shell trap
+   could not cover the same ground: `start` mode backgrounds the unit with no foreground
+   shell to catch a signal, and a trap never fires on `SIGKILL` or power loss regardless.
 3. **`flock`** is taken before the `systemctl is-active` check, which is otherwise TOCTOU
    racy: two concurrent launches could both pass it and race the `preStart` wipe.
 4. **`nix run .#gc`** reclaims directories whose unit is not active. `preStart` bounds a live
    guest to one stale image set, but a guest *renamed or deleted from the module tree* leaves
-   a directory nothing else will ever clean — the only unbounded source of orphans, now that
-   there is only one guest to leave behind.
+   a directory nothing else will ever clean — the only unbounded source of orphans, since
+   there is only one guest that could leave one behind.
 
 ### Discovery
 
@@ -446,6 +438,6 @@ runner-only, harvests ssh public keys from the launching user's agent into a sha
 own; `launch-fleet.nix` runs virtiofsd on the host itself and shares real host paths, with no
 ssh-key share at all — a fleet-started guest is reachable only over the serial console unless
 something else puts a key in `~agent/.ssh/authorized_keys`. `permafrost.gui` is silently
-ignored by the fleet path for the reason given under GUI Passthrough above. The tap-prefix
-fix described under Network Architecture applies to both paths identically, since both build
+ignored by the fleet path for the reason given under GUI Passthrough above. The tap naming
+described under Network Architecture applies to both paths identically, since both build
 their tap from the same `permafrost.identity.tapId` option.
