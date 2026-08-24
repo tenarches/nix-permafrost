@@ -10,8 +10,8 @@ claim could not be checked, it says so.
 
 ## 1. What you are getting
 
-`dsh` is one of several **agent VMs** in this repo. Each is a disposable Linux virtual
-machine holding one coding-agent tool. This one runs the [DeepSeek
+`dsh` is one of several **harnesses** carried by the one disposable guest this repo boots —
+see the [README](../README.md) if you have not met `permafrost` yet. This harness runs the [DeepSeek
 Harness](https://github.com/deepseek-ai/deepseek-harness), pointed at the **local vLLM
 server at `petunia.home.lan:8000`** — no external API, no key, nothing leaves the network.
 
@@ -30,7 +30,7 @@ What is set up for you:
 
 ## 2. The one thing to understand first: nothing persists
 
-Every agent VM here is rebuilt from scratch on each boot. The guest's entire home
+The `permafrost` guest is rebuilt from scratch on each boot. Its entire home
 directory is a fresh disk image; when the VM stops, it is deleted.
 
 **Anything you create inside the VM is gone when it stops.** That includes your session
@@ -42,12 +42,12 @@ remote, or copy it out over ssh.
 
 Two exceptions, both host directories mounted into the guest:
 
-- `~/.agents` — shared across every agent VM, and it is **the host's real `~/.agents`**.
+- `~/.agents` — shared into the guest, and it is **the host's real `~/.agents`**.
   Writes here land on your actual machine.
 - `~/workspace` — despite the name, this is *not* shared. It is a private, ephemeral
   directory on the guest's own disk.
 
-Unlike the other agents, `dsh` maps no host directories of its own. Its whole
+Unlike the other harnesses in this guest, `dsh` maps no host directories of its own. Its whole
 configuration is generated from Nix and copied in fresh on every boot.
 
 ---
@@ -57,10 +57,11 @@ configuration is generated from Nix and copied in fresh on every boot.
 From a checkout of this repo, on the host:
 
 ```bash
-sudo nix run .#dsh
+sudo nix run .#permafrost
 ```
 
-Root is needed to create the guest's network interface, not by dsh.
+Root is needed to create the guest's network interface, not by dsh. This boots the whole
+`permafrost` guest — every harness, dsh included — there is no `dsh`-only runner.
 
 That command builds the VM if needed, boots it, and attaches your terminal to its
 console. **To shut it down, press `Ctrl-a` then `x`.**
@@ -68,15 +69,15 @@ console. **To shut it down, press `Ctrl-a` then `x`.**
 To run it in the background instead:
 
 ```bash
-sudo nix run .#dsh start     # boot detached
-nix run .#status             # which agents are up, and at what address
-sudo nix run .#dsh stop
+sudo nix run .#permafrost start   # boot detached
+nix run .#status                   # is the guest up, and at what address
+sudo nix run .#permafrost stop
 ```
 
-The guest is `192.168.33.17`. Launching also writes an ssh config entry for you, so:
+The guest is `192.168.33.10`. Launching also writes an ssh config entry for you, so:
 
 ```bash
-ssh permafrost-dsh
+ssh permafrost
 ```
 
 That is the normal way in — the console works, but a real ssh session gives you a proper
@@ -107,7 +108,7 @@ in the guest.
 **`dsh-web`** — the default. Serves on the guest's loopback only. From your host:
 
 ```bash
-ssh -L 3080:127.0.0.1:3080 permafrost-dsh    # leave this running
+ssh -L 3080:127.0.0.1:3080 permafrost    # leave this running
 # then in that session, or another one:
 dsh-web
 ```
@@ -117,11 +118,11 @@ Open <http://localhost:3080>.
 **`dsh-web-lan`** — skips the tunnel. Serves on all the guest's interfaces:
 
 ```bash
-ssh permafrost-dsh
+ssh permafrost
 dsh-web-lan
 ```
 
-Open <http://192.168.33.17:3080> directly from the host.
+Open <http://192.168.33.10:3080> directly from the host.
 
 Neither opens a browser — there isn't one in the guest.
 
@@ -132,9 +133,9 @@ Neither opens a browser — there isn't one in the guest.
 >
 > That is a considered exception, not an oversight. `192.168.33.0/24` is a bridge that
 > exists only on your host and is NAT'd outbound, so "all interfaces" here means the host
-> and sibling agent VMs — not the internet. It is still a real widening: this UI drives an
-> agent with its sandbox off, and any other agent VM can reach it. Loopback stays the
-> default for that reason.
+> and anything else that ever joins that bridge — not the internet. It is still a real
+> widening: this UI drives an agent with its sandbox off, and anything with LAN access to
+> the guest can reach it. Loopback stays the default for that reason.
 >
 > Requests are additionally fenced on their `Host` header — a request arriving with a
 > forged `Host` gets `403 forbidden` regardless.
@@ -143,8 +144,10 @@ Neither opens a browser — there isn't one in the guest.
 
 ## 5. Switching models
 
-The catalogue lives in **`modules/models.nix`**, on the host, and is shared with the `pi`
-and `bv` agents. Three models are declared:
+The catalogue lives in **`modules/_lib/models.nix`**, on the host, and is shared with `pi` —
+which used to mean two separate agent VMs reading the same file, and now, with `dsh` and
+`pi` both harnesses in the one `permafrost` guest, just means two config files rendered from
+one source inside the same VM. Three models are declared:
 
 ```
 qwen3.6-27b
@@ -169,9 +172,9 @@ read at boot. The change lasts until the VM stops.
 
 You can also switch per-session in the web UI's Models page.
 
-**To change it permanently**, or to add a model, edit `modules/models.nix` on the host and
-relaunch. Adding a model is one entry in the `models` list; it reaches `dsh`, `pi` and
-`bv` together.
+**To change it permanently**, or to add a model, edit `modules/_lib/models.nix` on the host
+and relaunch. Adding a model is one entry in the `models` list; it reaches `dsh` and `pi`
+together.
 
 ### Reasoning effort
 
@@ -194,7 +197,7 @@ planes**. Knowing which is which saves a lot of confusion.
 | `~/.dsh/settings.yaml` | **User settings.** Model providers, endpoints, credentials-by-name. What the web Models page writes. | Live, on save |
 | `~/.dsh/cordis.patch.yml` | **Composition.** Which plugins are mounted and how. MCP servers and the default model. | On profile restart |
 
-Both are generated from `modules/dsh.nix` and **copied** into the guest — not symlinked.
+Both are generated from `modules/harness/dsh.nix` and **copied** into the guest — not symlinked.
 That matters: dsh rewrites files under `~/.dsh` on every boot, and the web UI writes
 `settings.yaml` in place, so read-only files there would break it.
 
@@ -319,7 +322,7 @@ To add one for a session, edit `~/.dsh/cordis.patch.yml` and add to the `insert`
 
 Restart the profile. Its tools appear as `mcp__example__<toolname>`.
 
-To make it permanent, add it to the `mcpServers` list in `modules/dsh.nix` — that renders
+To make it permanent, add it to the `mcpServers` list in `modules/harness/dsh.nix` — that renders
 the same row with a store path for `command`, so it does not depend on `PATH`.
 
 **A note on stderr.** An MCP server is a child process and inherits the terminal's stderr,
@@ -376,19 +379,19 @@ installed, and network access. Not tried here.
 
 | Path | Role |
 |---|---|
-| `modules/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the firewall port |
-| `modules/models.nix` | The shared model catalogue — endpoint, models, thinking budgets |
-| `modules/inventory.nix` | The `dsh` spec: address, packages, environment |
+| `modules/harness/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the firewall port |
+| `modules/_lib/models.nix` | The shared model catalogue — endpoint, models, thinking budgets |
+| `modules/guest/identity.nix` | The guest's address, `permafrost.identity.ip = 192.168.33.10` |
 | `flake.nix` | The `agent-skills` and `llm-agents` inputs |
-| `runners.nix` | `nix run .#dsh` |
+| `modules/_pkgs/runner.nix` | `nix run .#permafrost` |
 
 Two notes for anyone editing these:
 
-- `modules/models.nix` renders **two shapes**, because the consumers disagree. dsh's
+- `modules/_lib/models.nix` renders **two shapes**, because the consumers disagree. dsh's
   thinking-budget schema accepts only `minimal`/`low`/`medium`/`high` and rejects the
   `xhigh` key that pi accepts. That is what `dshThinkingBudgets` is for.
 - The `agent-skills` input is a private repo over ssh, so `nix flake check` needs an ssh
-  key that can reach it. Drop the input and the skills copy in `modules/dsh.nix` if you
+  key that can reach it. Drop the input and the skills copy in `modules/harness/dsh.nix` if you
   are forking this.
 
 ---
@@ -413,9 +416,9 @@ live, `cordis.patch.yml` needs a profile restart. Confirm with `--dump-config`.
 **403 from the web UI.** The Host-header fence. Reach the UI at the address it was bound
 to, not through a proxy or alias.
 
-**The VM will not start.** `sudo nix run .#dsh` needs root, a free `192.168.33.17`, and
-KVM. `nix run .#status` shows what is already running; `nix run .#gc` reclaims disk from
-VMs that are gone.
+**The VM will not start.** `sudo nix run .#permafrost` needs root, a free `192.168.33.10`,
+and KVM. `nix run .#status` shows whether the guest is already running; `nix run .#gc`
+reclaims disk from a guest directory that is gone.
 
 ---
 
