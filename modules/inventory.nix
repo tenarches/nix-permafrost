@@ -14,6 +14,21 @@ let
     pkgs.mcp-nixos
   ];
 
+  # Browser automation, in every guest.
+  #
+  # playwright-test, not playwright: the latter is playwright-core, a bare node
+  # library directory with no bin/, so installing it puts nothing on PATH. This
+  # is the package that carries the `playwright` command, and its wrapper
+  # defaults PLAYWRIGHT_BROWSERS_PATH to the Nix-built browsers — which matters
+  # here, because the fallback is upstream's own download: an unpatched binary
+  # that will not run on NixOS, fetched into a home that is discarded at
+  # shutdown anyway.
+  #
+  # The browsers are ~2.1GiB, but /nix/store reaches the guests over virtiofs
+  # from the host, so that is one copy on the host no matter how many guests
+  # list this.
+  browserTools = [ pkgs.playwright-test ];
+
   # Every agent can display GUI apps on the host, but through waypipe rather
   # than `gui`: `waypipe ssh agent@<ip> bash -l` needs nothing from this flag.
   #
@@ -50,7 +65,8 @@ let
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code
         openclaude
       ]
-      ++ mcpServers;
+      ++ mcpServers
+      ++ browserTools;
       credentials = {
         ANTHROPIC_API_KEY = "/run/secrets/anthropic-api-key";
       };
@@ -71,7 +87,8 @@ let
       extraPackages = [
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.opencode
       ]
-      ++ mcpServers;
+      ++ mcpServers
+      ++ browserTools;
       credentials = {
         OPENAI_API_KEY = "/run/secrets/openai-api-key";
       };
@@ -93,7 +110,8 @@ let
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
       ]
-      ++ mcpServers;
+      ++ mcpServers
+      ++ browserTools;
       homeFiles = {
         ".pi/agent/models.json".source = models.piModelsJson;
       };
@@ -132,7 +150,8 @@ let
         inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.mcporter
         pkgs.nodejs
       ]
-      ++ mcpServers;
+      ++ mcpServers
+      ++ browserTools;
       credentials = {
         GITHUB_TOKEN = "/run/secrets/github-token";
       };
@@ -186,7 +205,7 @@ let
       ip = "192.168.33.12";
       mac = "02:00:00:00:00:12";
       vsockCid = 12;
-      extraPackages = [ pkgs.antigravity-cli ];
+      extraPackages = [ pkgs.antigravity-cli ] ++ browserTools;
     };
 
     dsh = {
@@ -210,7 +229,8 @@ let
         # dsh-model edits the patch file in place.
         pkgs.yq-go
       ]
-      ++ mcpServers;
+      ++ mcpServers
+      ++ browserTools;
 
       extraModules = [
         { _module.args.guestIp = "192.168.33.17"; }
@@ -251,7 +271,10 @@ let
           guest = ".local/share/crush";
         }
       ];
-      extraPackages = [ inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush ];
+      extraPackages = [
+        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.crush
+      ]
+      ++ browserTools;
     };
   };
 
