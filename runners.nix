@@ -67,9 +67,9 @@ let
   mkRunner =
     spec:
     let
-      # NOTE: the host's ~/workspace is deliberately NOT shared. Each guest gets a
-      # private ephemeral workspace on its own home volume instead, so no host
-      # directory is reachable from more than one VM.
+      # NOTE: the host's ~/workspace is deliberately NOT shared. The guest gets a
+      # private ephemeral workspace on its own home volume instead, so nothing an
+      # agent checks out or builds lands on the host.
       globalShares = [
         {
           host = ".agents";
@@ -532,10 +532,10 @@ let
     echo "Reclaimed $reclaimed directories."
   '';
 
-  # Discovery: which agent owns which address, and what is actually running.
+  # Discovery: the guest's address, and whether it is actually running.
   # machinectl is not usable here — microvm.nix's own runner.nix notes that NSS
-  # resolution works for containers but not VMs, so machined would list the VMs
-  # without their addresses. IPs are static in inventory.nix, so read them there.
+  # resolution works for containers but not VMs, so machined would list the VM
+  # without its address. The IP is static in inventory.nix, so read it there.
   statusScript = pkgs.writeShellScriptBin "permafrost-status" ''
     set -euo pipefail
     printf '%-13s %-16s %-5s %-18s %s\n' AGENT IP CID TAP STATE
@@ -584,10 +584,10 @@ let
       ServerAliveInterval 150
       ServerAliveCountMax 2
 
-    # Convenience aliases. The subnet block above already covers these addresses,
-    # so a stale alias costs nothing beyond the name.
+    # Convenience alias. The subnet block above already covers this address, so
+    # a stale alias costs nothing beyond the name.
     ${lib.concatMapStringsSep "\n" (spec: ''
-      Host permafrost-${spec.name}
+      Host ${spec.name}
         Hostname ${spec.ip}
     '') (lib.attrValues vms)}
     EOF
@@ -599,11 +599,9 @@ in
   gc = gcScript;
   ssh-config = sshConfigScript;
 
-  claude = mkRunner vms.claude;
-  opencode = mkRunner vms.opencode;
-  pi = mkRunner vms.pi;
-  antigravity = mkRunner vms.antigravity;
-  crush = mkRunner vms.crush;
-  dsh = mkRunner vms.dsh;
-  default = mkRunner vms.claude;
+  # One guest carrying every harness, so there is one runner rather than one
+  # per agent. The old per-agent names are gone rather than aliased: they would
+  # each have booted the same VM under a name that no longer means anything.
+  permafrost = mkRunner vms.permafrost;
+  default = mkRunner vms.permafrost;
 }

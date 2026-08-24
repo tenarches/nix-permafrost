@@ -133,7 +133,10 @@
         };
 
       flake = {
-        nixosConfigurations.permafrost = nixpkgs.lib.nixosSystem {
+        # The host that runs the guest. Named permafrost-host because the guest
+        # itself is now `permafrost` — one VM carrying every harness — and two
+        # machines on the same bridge cannot share a hostname.
+        nixosConfigurations.permafrost-host = nixpkgs.lib.nixosSystem {
           specialArgs = { inherit inputs; };
           modules = [
             # Host configuration
@@ -155,7 +158,7 @@
                 config.allowUnfree = true;
                 hostPlatform.system = "x86_64-linux";
               };
-              networking.hostName = "permafrost";
+              networking.hostName = "permafrost-host";
               system.stateVersion = "26.05";
 
               # Minimal config to pass nix flake check

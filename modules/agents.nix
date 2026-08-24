@@ -25,14 +25,14 @@ let
       nixpkgs.overlays = spec.overlays or [ ];
 
       microvm = {
-        # No workspace share: each guest gets a private ephemeral workspace on its
+        # No workspace share: the guest gets a private ephemeral workspace on its
         # own home volume (see agent-base.nix), so no host directory is shared.
         #
         # spec.gui is deliberately ignored here. microvm.graphics on
         # cloud-hypervisor needs a host-side `crosvm device gpu` pointed at a
         # live compositor via $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY, and the host
-        # module's microvm@<name>.service is a system unit with neither. GUI
-        # guests are runner-only: `nix run .#antigravity`.
+        # module's microvm@<name>.service is a system unit with neither. GUI is
+        # runner-only: `nix run .#permafrost`.
         shares = map (s: {
           source = "/mnt/persist/${s.guest}";
           mountPoint = "/mnt/persist/${s.guest}";
@@ -42,10 +42,13 @@ let
         }) (spec.persistentShares or [ ]);
 
         vsock.cid = spec.vsockCid;
+        # 'microvm-', matching the runner path — modules/host.nix bridges
+        # `matchConfig.Name = "microvm*"` onto microbr, so a tap named anything
+        # else is created and then never attached to the bridge.
         interfaces = [
           {
             type = "tap";
-            id = "vm-" + spec.tapId;
+            id = "microvm-" + spec.tapId;
             inherit (spec) mac;
           }
         ];
