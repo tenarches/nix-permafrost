@@ -1,8 +1,7 @@
 {
   # Who the guest is on the network, and the one flag that changes how it is
-  # launched. This is what is left of modules/inventory.nix: with a single guest
-  # there is no registry to keep, only the handful of values the host side and
-  # the guest side both have to agree on.
+  # launched. With a single guest there is no registry to keep, only the
+  # handful of values the host side and the guest side both have to agree on.
   flake.modules.nixos.guest-identity =
     { lib, config, ... }:
     let

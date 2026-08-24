@@ -1,7 +1,6 @@
 {
   # openclaude — an independent coding-agent CLI, not an accessory to
-  # claude-code. It rode along in harness/claude.nix because it is a Claude Code
-  # fork and the two were packaged together, but it keeps its own state under
+  # claude-code. It is a Claude Code fork, but it keeps its own state under
   # its own names, so it gets its own module like every other harness.
   #
   # The package is built here from npm rather than coming from llm-agents.nix:
@@ -12,9 +11,9 @@
       environment.systemPackages = [ (pkgs.callPackage ../_pkgs/openclaude.nix { }) ];
 
       # The same two-part shape as claude-code's: a settings directory plus one
-      # JSON file next to it holding auth. Neither persisted while this was
-      # folded into harness/claude.nix, which shares only the `.claude` pair —
-      # so a login here did not survive a boot.
+      # JSON file next to it holding auth. Both need a share of their own —
+      # harness-claude only shares the `.claude` pair, so without these a
+      # login here would not survive a boot.
       permafrost.shares = [
         {
           host = ".openclaude";

@@ -11,10 +11,10 @@ let
   config.allowUnfree = true;
 in
 {
-  # The runner scripts and the guest need the same package set. runners.nix used
-  # to reach for it with a second `import inputs.nixpkgs`, which meant a whole
-  # extra nixpkgs evaluation on every `nix build`; overriding the perSystem
-  # `pkgs` argument gets the overlays in without one.
+  # The runner scripts and the guest need the same package set. Overriding the
+  # perSystem `pkgs` argument gets the overlays into both without a second
+  # `import inputs.nixpkgs` and the extra nixpkgs evaluation that would cost on
+  # every `nix build`.
   perSystem =
     { system, ... }:
     {

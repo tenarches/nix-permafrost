@@ -21,7 +21,6 @@
           # tmux starts a login shell by default, which can reset PATH.
           set -g default-command "${pkgs.bash}/bin/bash"
 
-          # Retained from the system-level tmux config this replaced
           set -g extended-keys on
           set -g extended-keys-format csi-u
 

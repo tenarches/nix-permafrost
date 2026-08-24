@@ -1,8 +1,8 @@
 # Naming for the virtiofs shares that carry host dot directories into the guest.
 #
 # Not a module — imported directly by the guest launch modules and by the runner
-# script, which is the point: all three used to spell this hash out inline and a
-# typo in any one of them would have produced a share the guest mounts nowhere.
+# script, which is the point: one definition shared by all three call sites, so
+# a typo in any one of them can't produce a share the guest mounts nowhere.
 {
   # A virtiofs tag is capped at 36 characters, and the guest paths are longer
   # than that once they are nested (.local/share/crush). Hash instead, so the tag

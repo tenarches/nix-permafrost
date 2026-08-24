@@ -12,9 +12,8 @@
     in
     {
       # One guest carrying every harness, so there is one runner rather than one
-      # per agent. The old per-agent names are gone rather than aliased: each
-      # would have booted the same VM under a name that no longer distinguishes
-      # anything.
+      # per agent. Per-agent names are not kept as aliases: each would boot the
+      # same VM under a label that distinguishes nothing.
       packages = {
         permafrost = runner;
         default = runner;
