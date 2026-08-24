@@ -33,6 +33,17 @@
         defaultSopsFile = ../../secrets/agents.yaml;
         age.keyFile = "/var/lib/sops-nix/key.txt";
 
+        # sops-install-secrets checks at *build* time that every secret named
+        # below is a key in the file, and secrets/agents.yaml is a placeholder
+        # with nothing in it — so the check fails the host's toplevel before
+        # anything is ever deployed. Deferring it keeps the declarations below
+        # as the record of which keys belong here.
+        #
+        # Turn this back on once the file has real content: the check is worth
+        # having, and it is the only thing that catches a typo in a secret name
+        # before activation.
+        validateSopsFiles = false;
+
         secrets = {
           "anthropic-api-key" = {
             owner = "root";
