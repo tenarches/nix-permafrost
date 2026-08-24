@@ -1,0 +1,311 @@
+# The JIT launcher: `nix run .#permafrost [run|start|stop|status]`.
+#
+# Everything the guest needs on the host is created at launch and reclaimed when
+# the unit stops — the bridge, the NAT rules, one virtiofsd per share, the ssh
+# keys harvested from the launching user's agent, and the ephemeral disk images.
+# Nothing is left behind on a clean exit, a crash, or a SIGKILL.
+{
+  pkgs,
+  nixos,
+  sshConfig,
+}:
+
+let
+  inherit (pkgs) lib;
+  shareLib = import ../_lib/shares.nix;
+
+  cfg = nixos.config.permafrost;
+  inherit (cfg) identity;
+  inherit (cfg) shares;
+
+  # Host-side home for this guest's ephemeral disk images. Must match stateDir in
+  # modules/guest/base.nix, which keys it on the guest's name.
+  stateDir = "/var/lib/permafrost/${identity.name}";
+in
+
+pkgs.writeShellScriptBin identity.name ''
+  set -e
+  COMMAND="''${1:-run}"
+  [ $# -gt 0 ] && shift
+
+  # 1. Environment Detection
+  if [ -n "$SUDO_USER" ]; then
+    REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+  else
+    REAL_HOME=$(getent passwd "$USER" | cut -d: -f6)
+  fi
+
+  HOST_XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/1000}"
+  HOST_WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-wayland-0}"
+  if [ ! -S "$HOST_XDG_RUNTIME_DIR/$HOST_WAYLAND_DISPLAY" ]; then
+    PROBED_SOCKET=$(ls $HOST_XDG_RUNTIME_DIR/wayland-* 2>/dev/null | head -n1)
+    [ -S "$PROBED_SOCKET" ] && HOST_WAYLAND_DISPLAY=$(basename "$PROBED_SOCKET")
+  fi
+
+  ${lib.optionalString cfg.gui ''
+    # Fail fast rather than hang. microvm.nix's preStart backgrounds
+    #   crosvm device gpu --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY
+    # and then spins in `while ! [ -S gpu.sock ]`, so with no compositor to
+    # attach to crosvm exits and that loop never terminates.
+    if [ ! -S "$HOST_XDG_RUNTIME_DIR/$HOST_WAYLAND_DISPLAY" ]; then
+      echo "Error: permafrost.gui is on but no Wayland compositor was found." >&2
+      echo "  Looked for: $HOST_XDG_RUNTIME_DIR/$HOST_WAYLAND_DISPLAY" >&2
+      echo "  Launch from a graphical session, and use 'sudo -E' so that" >&2
+      echo "  XDG_RUNTIME_DIR and WAYLAND_DISPLAY survive into the runner." >&2
+      echo "  For a headless host, set permafrost.gui = false in modules/guest/identity.nix." >&2
+      exit 1
+    fi
+  ''}
+
+  # 2. Lifecycle & Path Configuration
+  # We use Systemd RuntimeDirectory for "pure" automatic cleanup of all sockets/pids
+  RUNTIME_NAME="microvm-${identity.name}"
+  SOCKET_DIR="/run/$RUNTIME_NAME"
+  UNIT_NAME="microvm-${identity.name}"
+  STATE_DIR="${stateDir}"
+  BRIDGE="microbr"
+  GATEWAY_IP="${identity.gateway}"
+  TAP_ID="microvm-${identity.tapId}"
+
+  # 3. JIT Credential Collection
+  # We collect keys BEFORE the systemd-run isolation block
+  # We use a shared directory pattern recommended by microvm.nix
+  SSH_KEYS_DIR="$SOCKET_DIR/ssh-keys"
+  mkdir -p "$SSH_KEYS_DIR"
+  chmod 755 "$SSH_KEYS_DIR"
+
+  if [ -n "$SUDO_USER" ] && [ -z "$SSH_AUTH_SOCK" ]; then
+    # Try to find the user's agent if they forgot sudo -E. The list is
+    # ordered by preference and matched exactly rather than by glob:
+    # permafrost-agent.sock sits in the same directory and holds the
+    # agentic key, so a wildcard could enrol that key for interactive
+    # login — and for root — inverting the isolation the two-agent split
+    # exists to provide. Only the personal agent belongs here.
+    USER_RUNTIME_DIR="/run/user/$(id -u "$SUDO_USER")"
+    for CANDIDATE in \
+      ssh-tpm-agent.sock \
+      gnupg/S.gpg-agent.ssh \
+      ssh-agent.socket \
+      keyring/ssh; do
+      if [ -S "$USER_RUNTIME_DIR/$CANDIDATE" ]; then
+        export SSH_AUTH_SOCK="$USER_RUNTIME_DIR/$CANDIDATE"
+        echo "Auto-detected SSH agent for $SUDO_USER at $SSH_AUTH_SOCK"
+        break
+      fi
+    done
+  fi
+
+  # Whichever agent we ended up with — probed or inherited through
+  # sudo -E — decides who can log in, because authorized_keys is just
+  # its public halves. The permafrost agent holds only the agentic key,
+  # which is not enrolled for interactive login.
+  case "$SSH_AUTH_SOCK" in
+    */permafrost-agent.sock)
+      echo "Warning: SSH_AUTH_SOCK points at the permafrost agent." >&2
+      echo "  Only the agentic key will be enrolled in authorized_keys, so your" >&2
+      echo "  interactive login will likely be rejected. Launch from a session on" >&2
+      echo "  the personal agent (ssh-tpm-agent.sock) instead." >&2
+      ;;
+  esac
+
+  # Extract keys for both agent and root
+  if [ -n "$SSH_AUTH_SOCK" ]; then
+    ssh-add -L > "$SSH_KEYS_DIR/agent" 2>/dev/null || true
+    cp "$SSH_KEYS_DIR/agent" "$SSH_KEYS_DIR/root" || true
+  fi
+  if [ -n "$AGENT_PUBKEYS" ]; then
+    echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/agent"
+    echo "$AGENT_PUBKEYS" >> "$SSH_KEYS_DIR/root"
+  fi
+  chmod 644 "$SSH_KEYS_DIR"/* || true
+
+  # 3b. Host-side client config
+  #
+  # Installed here rather than left to the operator: it is derived from the
+  # same configuration the guest is built from, so writing it at launch is what
+  # keeps the two from drifting, and the launching user's uid resolves the
+  # agent socket path without anyone having to set a variable.
+  #
+  # A pre-existing file that we did not write is moved aside, once, rather
+  # than clobbered.
+  if [ -n "$SUDO_USER" ]; then
+    SSH_CONF="$REAL_HOME/.ssh/config.d/13-permafrost.conf"
+    SUDO_GROUP=$(id -gn "$SUDO_USER")
+    ${pkgs.coreutils}/bin/install -d -o "$SUDO_USER" -g "$SUDO_GROUP" -m 700 \
+      "$REAL_HOME/.ssh" "$REAL_HOME/.ssh/config.d"
+
+    SKIP_SSH_CONF=""
+    if [ -e "$SSH_CONF" ] && ! ${pkgs.gnugrep}/bin/grep -qF "Managed by nix-permafrost" "$SSH_CONF"; then
+      if [ -e "$SSH_CONF.bak" ]; then
+        # Backed up once already, so this is a later hand-edit. Losing it
+        # silently is worse than leaving the config stale.
+        echo "Warning: $SSH_CONF is hand-edited and $SSH_CONF.bak already exists." >&2
+        echo "  Leaving both untouched. Delete or restore one of them to let" >&2
+        echo "  permafrost manage this file again." >&2
+        SKIP_SSH_CONF=1
+      else
+        ${pkgs.coreutils}/bin/mv "$SSH_CONF" "$SSH_CONF.bak"
+        echo "Kept your existing ssh config as $SSH_CONF.bak; permafrost now manages $SSH_CONF." >&2
+      fi
+    fi
+
+    NEW_CONF=$(${sshConfig}/bin/permafrost-ssh-config "/run/user/$(id -u "$SUDO_USER")")
+    if [ -z "$SKIP_SSH_CONF" ] && [ "$NEW_CONF" != "$(${pkgs.coreutils}/bin/cat "$SSH_CONF" 2>/dev/null)" ]; then
+      printf '%s\n' "$NEW_CONF" > "$SSH_CONF"
+      ${pkgs.coreutils}/bin/chown "$SUDO_USER:$SUDO_GROUP" "$SSH_CONF"
+      chmod 600 "$SSH_CONF"
+      echo "Updated $SSH_CONF from the guest's configuration."
+    fi
+  fi
+
+  case "$COMMAND" in
+    status)
+      if systemctl is-active --quiet "$UNIT_NAME"; then
+        echo "Status: RUNNING"
+        echo "IP:     ${identity.ip}"
+        echo "CID:    ${toString identity.vsockCid}"
+        echo "Runtime: $SOCKET_DIR"
+      else
+        echo "Status: STOPPED"
+      fi
+      exit 0
+      ;;
+    stop)
+      echo "Stopping $UNIT_NAME..."
+      systemctl stop "$UNIT_NAME"
+      exit 0
+      ;;
+    run|start)
+      # Take the lock before the is-active check, otherwise two concurrent
+      # launches can both pass the check and then race the preStart wipe of
+      # the disk images. The fd is held for the life of the script.
+      ${pkgs.coreutils}/bin/mkdir -p "$STATE_DIR"
+      exec 9>"$STATE_DIR/.lock"
+      if ! ${pkgs.util-linux}/bin/flock -n 9; then
+        echo "Error: another launch of ${identity.name} is already in progress."
+        exit 1
+      fi
+      if systemctl is-active --quiet "$UNIT_NAME"; then
+        echo "Error: $UNIT_NAME is already running."
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Usage: $0 {run|start|stop|status}"
+      exit 1
+      ;;
+  esac
+
+  echo "Initializing Pure Sandbox Lifecycle for ${identity.name}..."
+  echo "Runtime Directory: $SOCKET_DIR"
+
+  # 3. JIT Networking Setup
+  if ! ip link show "$BRIDGE" >/dev/null 2>&1; then
+    ip link add name "$BRIDGE" type bridge
+    ip addr add "$GATEWAY_IP/24" dev "$BRIDGE"
+    ip link set "$BRIDGE" up
+  fi
+
+  ${pkgs.procps}/bin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  EXT_IF=$(ip route | grep default | awk '{print $5}' | head -n1)
+
+  # Idempotent NAT — check-then-add, and rules are never removed on cleanup, so
+  # a second launch neither duplicates them nor tears down a live one.
+  if [ -n "$EXT_IF" ]; then
+    ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE 2>/dev/null || \
+      ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s 192.168.33.0/24 -o "$EXT_IF" -j MASQUERADE
+    ${pkgs.iptables}/bin/iptables -C FORWARD -i "$BRIDGE" -j ACCEPT 2>/dev/null || \
+      ${pkgs.iptables}/bin/iptables -A FORWARD -i "$BRIDGE" -j ACCEPT
+    ${pkgs.iptables}/bin/iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+      ${pkgs.iptables}/bin/iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+  fi
+
+  # NOTE: image cleanup is NOT done here. A shell trap only fires in "run" mode
+  # and never on SIGKILL or host power loss. It is an ExecStopPost property on
+  # the unit instead (see RUN_ARGS), which systemd runs whenever the unit stops.
+
+  # Background TAP attachment
+  (
+    for i in {1..100}; do
+      if ip link show "$TAP_ID" >/dev/null 2>&1; then
+        ip link set "$TAP_ID" master "$BRIDGE"
+        ip link set "$TAP_ID" up
+        break
+      fi
+      sleep 0.1
+    done
+  ) &
+
+  # 4. Process Launch Wrapper
+  # We wrap everything in a systemd-run service to ensure RuntimeDirectory cleanup works
+  # regardless of how the script or VM exits.
+
+  LAUNCH_COMMAND='
+    # Start virtiofsd backends
+    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
+    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
+
+    ${lib.concatMapStringsSep "\n" (s: ''
+      ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
+      ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "$SOCKET_DIR/${shareLib.tag s}.sock" --shared-dir "$REAL_HOME/${s.host}" --sandbox namespace &
+    '') shares}
+
+    # Wait for backend readiness
+    echo "Waiting for virtiofsd backends..."
+    while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    ${lib.concatMapStringsSep "\n" (
+      s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
+    ) shares}
+
+    # Final VM Launch
+    # All control sockets are placed in SOCKET_DIR: the notify.vsock and
+    # nixos.sock are moved here to keep the project root pure.
+    ${nixos.config.microvm.declaredRunner}/bin/microvm-run \
+      --api-socket "$SOCKET_DIR/nixos.sock" \
+      --vsock "cid=${toString identity.vsockCid},socket=$SOCKET_DIR/notify.vsock"
+  '
+
+  RUN_ARGS=(
+    --unit="$UNIT_NAME"
+    --collect
+    --service-type=exec
+    --property="RuntimeDirectory=$RUNTIME_NAME"
+    --property="RuntimeDirectoryPreserve=no"
+    --property="Environment=PATH=${
+      lib.makeBinPath [
+        pkgs.coreutils
+        pkgs.bash
+        pkgs.util-linux
+        pkgs.openssh
+      ]
+    }"
+    --property="Environment=REAL_HOME=$REAL_HOME"
+    --property="Environment=HOST_XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR"
+    --property="Environment=HOST_WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
+    # microvm.nix's cloud-hypervisor preStart runs
+    #   crosvm device gpu --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY
+    # verbatim, so it needs those exact names, not the HOST_* copies. The
+    # unit runs as root, which can traverse the invoking user's 0700
+    # /run/user/<uid>.
+    --property="Environment=XDG_RUNTIME_DIR=$HOST_XDG_RUNTIME_DIR"
+    --property="Environment=WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY"
+    --property="Environment=SOCKET_DIR=$SOCKET_DIR"
+    --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
+    --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
+    --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
+    --description="Permafrost VM: ${identity.name}"
+    # Reclaim the ephemeral disk images whenever the unit stops — clean exit,
+    # crash, or SIGKILL — in both run and start modes. preStart also wipes on
+    # the next boot, so a host power loss leaves at most one stale image set,
+    # reclaimed on the next launch or by `nix run .#gc`.
+    --property="ExecStopPost=${pkgs.coreutils}/bin/rm -rf $STATE_DIR"
+  )
+
+  if [ "$COMMAND" = "run" ]; then
+    systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+  else
+    systemd-run "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
+    echo "${identity.name} started in background (unit: $UNIT_NAME)."
+  fi
+''

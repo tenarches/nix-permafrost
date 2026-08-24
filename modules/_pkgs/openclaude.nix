@@ -14,7 +14,7 @@ pkgs.buildNpmPackage rec {
   #    - Update openclaude-lock.json (requires npm):
   #      tar -xf <TGZ_FILE>
   #      cd package && npm install --package-lock-only --legacy-peer-deps
-  #      cp package-lock.json modules/programs/openclaude-lock.json
+  #      cp package-lock.json modules/_pkgs/openclaude-lock.json
   #    - Run: nix build .#claude (or the openclaude package)
   #    - Copy the 'got:' hash from the failure message.
   src = pkgs.fetchurl {

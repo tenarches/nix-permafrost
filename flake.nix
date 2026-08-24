@@ -6,6 +6,12 @@
 
     flake-parts.url = "github:hercules-ci/flake-parts";
 
+    # Every .nix file under ./modules is a flake-parts module, discovered rather
+    # than listed. Adding a harness or a guest concern is adding a file — but the
+    # failure mode is silence, so see the notes in modules/flake/systems.nix and
+    # modules/guest/module-list.nix before moving anything.
+    import-tree.url = "github:vic/import-tree";
+
     microvm = {
       url = "github:astro/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -39,7 +45,7 @@
     #
     # Site-specific and private: evaluating this flake needs ssh to the gitea
     # behind code-ssh.novuscotia.com. Drop the input and the skills copy in
-    # modules/dsh.nix in a fork.
+    # modules/harness/dsh.nix in a fork.
     agent-skills = {
       url = "git+ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git?ref=main";
       flake = false;
@@ -86,107 +92,7 @@
 
   };
 
-  outputs =
-    inputs@{
-      nixpkgs,
-      flake-parts,
-      microvm,
-      pre-commit-hooks,
-      ...
-    }:
-    flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [ pre-commit-hooks.flakeModule ];
-
-      systems = [
-        "x86_64-linux"
-      ];
-
-      perSystem =
-        {
-          config,
-          pkgs,
-          system,
-          ...
-        }:
-        {
-          formatter = pkgs.nixfmt;
-
-          pre-commit.settings.hooks = {
-            nixfmt.enable = true;
-            deadnix.enable = true;
-            statix.enable = true;
-          };
-
-          devShells.default = pkgs.mkShell {
-            shellHook = config.pre-commit.installationScript;
-            packages = [
-              inputs.devenv.packages.${system}.devenv
-              pkgs.sops
-              pkgs.age
-              pkgs.virtiofsd
-              config.pre-commit.settings.package
-            ];
-          };
-
-          # Export MicroVM runners as packages
-          packages = import ./runners.nix { inherit inputs system; };
-        };
-
-      flake = {
-        # The host that runs the guest. Named permafrost-host because the guest
-        # itself is now `permafrost` — one VM carrying every harness — and two
-        # machines on the same bridge cannot share a hostname.
-        nixosConfigurations.permafrost-host = nixpkgs.lib.nixosSystem {
-          specialArgs = { inherit inputs; };
-          modules = [
-            # Host configuration
-            ./modules/host.nix
-            ./modules/secrets.nix
-            ./modules/agents.nix
-
-            # MicroVM host module
-            microvm.nixosModules.host
-
-            {
-              nixpkgs = {
-                overlays = [
-                  # Centralized Python MCP overrides
-                  (import ./overlays/python-mcp.nix)
-                  # MCP server packages — evaluated against patched pkgs
-                  inputs.mcp-servers-nix.overlays.default
-                ];
-                config.allowUnfree = true;
-                hostPlatform.system = "x86_64-linux";
-              };
-              networking.hostName = "permafrost-host";
-              system.stateVersion = "26.05";
-
-              # Minimal config to pass nix flake check
-              fileSystems."/" = {
-                device = "tmpfs";
-                fsType = "tmpfs";
-              };
-              boot.loader.grub.enable = false;
-              boot.loader.generic-extlinux-compatible.enable = true;
-
-              # Example user
-              users.users.agent = {
-                isNormalUser = true;
-                extraGroups = [
-                  "wheel"
-                  "networkmanager"
-                  "microvm"
-                ];
-              };
-            }
-          ];
-        };
-
-        # Reusable modules
-        nixosModules = {
-          agent-base = ./modules/agent-base.nix;
-          host-bridge = ./modules/host.nix;
-        };
-      };
-    };
+  # Everything else — systems, perSystem, the host and the guest — lives in a
+  # module file under ./modules. Nothing is configured here.
+  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } (inputs.import-tree ./modules);
 }
