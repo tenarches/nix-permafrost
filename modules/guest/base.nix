@@ -330,6 +330,13 @@
           # binary stays here for root.
           tmux
           jq
+          # An interpreter the agents reach for often enough that its absence
+          # is a recurring interruption — a one-off script, a bit of parsing,
+          # a quick calculation. Nearly free: harness/mcp.nix already drags the
+          # same derivation in for the two python MCP servers, so this adds the
+          # profile entries and not the interpreter. Measured at 61 KiB on the
+          # toplevel closure.
+          python3
           # GUI Support libraries (Mesa/GL)
           mesa
           libGL
