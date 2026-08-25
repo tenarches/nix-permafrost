@@ -182,7 +182,7 @@ pkgs.writeShellScriptBin identity.name ''
   VAULT_ADDR="''${VAULT_ADDR:-https://vault.service.consul:8200}"
   VAULT_PKI_MOUNT="''${VAULT_PKI_MOUNT:-pki_int_homelab}"
   VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-permafrost-guest}"
-  VAULT_TLS_CN="''${VAULT_TLS_CN:-${identity.name}.home.lan}"
+  VAULT_TLS_CN="''${VAULT_TLS_CN:-${if identity.fqdn != null then identity.fqdn else identity.name}}"
   # Long enough not to expire under a coding session that runs for days. Well
   # inside the 768h a mount defaults to, so no mount tune is needed — but the
   # role's own max_ttl still caps it, and Vault caps rather than refuses, so

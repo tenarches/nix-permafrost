@@ -33,7 +33,11 @@
       # The address the TLS front end serves and the helper prints. Read from
       # the guest's own identity rather than injected, so the two cannot
       # disagree.
-      inherit (config.permafrost.identity) ip;
+      inherit (config.permafrost.identity) ip fqdn;
+
+      # Every authority the /api Host-header fence has to accept. Port-less
+      # entries match on any port, so this does not have to track tlsPort.
+      trustedHosts = [ ip ] ++ lib.optional (fqdn != null) fqdn;
 
       # dsh's own plaintext listener, loopback-only, and the TLS port caddy
       # publishes on the bridge.
@@ -256,7 +260,9 @@
           #     from the host, through caddy
           #   http://localhost:${toString port}
           #     through ssh -L ${toString port}:127.0.0.1:${toString port} permafrost
-          exec dsh web --no-open --port ${toString port} --trusted-host ${ip} "$@"
+          exec dsh web --no-open --port ${toString port} ${
+            lib.concatMapStringsSep " " (h: "--trusted-host ${h}") trustedHosts
+          } "$@"
         '';
       };
 
@@ -364,6 +370,12 @@
         globalConfig = "auto_https disable_redirects";
 
         virtualHosts."https://${ip}:${toString tlsPort}" = {
+          # The certificate carries the name as a DNS SAN, so serving it costs
+          # nothing extra. Without this a request arriving under the name
+          # matches no site and caddy answers it itself with an empty 200 —
+          # which looks like success and renders a blank page.
+          serverAliases = lib.optional (fqdn != null) "https://${fqdn}:${toString tlsPort}";
+
           # Bind the wildcard rather than the address itself. caddy.service
           # does require network-online.target, so ${ip} would normally be
           # assigned by then — but that makes the listener's success depend on

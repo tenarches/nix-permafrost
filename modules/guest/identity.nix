@@ -31,6 +31,27 @@
           };
 
           ip = lib.mkOption { type = lib.types.str; };
+
+          fqdn = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "permafrost.home.lan";
+            description = ''
+              A DNS name that resolves to this guest, or `null` if it has none.
+
+              Site-specific, so it defaults to nothing: a fork has no reason to
+              inherit someone else's search domain, and everything works
+              without it — the address is what the guest is actually reached
+              by.
+
+              Setting it makes the name a first-class second identity. The
+              launcher asks Vault for a certificate carrying it as the subject
+              and the address as an IP SAN, caddy serves both authorities, and
+              dsh's `/api` Host-header fence accepts both. Those three have to
+              agree, which is why the name is declared once here rather than
+              written out in each of them.
+            '';
+          };
           mac = lib.mkOption { type = lib.types.str; };
           vsockCid = lib.mkOption { type = lib.types.int; };
 

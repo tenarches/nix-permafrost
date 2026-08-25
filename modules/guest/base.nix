@@ -295,6 +295,13 @@
       # Directories the guest needs before Home Manager activation runs. The
       # share symlinks themselves are generated in guest/shares.nix.
       systemd.tmpfiles.rules = [
+        # OpenSSH records every login here and warns twice per session when it
+        # is missing — "lastlog_openseek: Couldn't stat /var/log/lastlog".
+        # Nothing creates it: the file is conventionally shipped by the
+        # distribution, and /var is a fresh volume on every boot. Sparse and
+        # empty is all it needs to be.
+        "f /var/log/lastlog 0644 root root -"
+
         # The home volume mounts as root:root 0755 and must be chowned to the agent.
         # users.users.agent.createHome does chown+chmod, but it runs during activation,
         # which is not ordered after local-fs.target — it chowns the pre-mount directory
