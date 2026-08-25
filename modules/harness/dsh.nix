@@ -48,6 +48,31 @@
       # unit's own ReadWritePaths already cover it.
       tlsDir = "/var/lib/caddy/tls";
 
+      dshPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.dsh;
+
+      # dsh's environment. Named rather than written straight into
+      # environment.variables because a systemd user unit does not inherit that
+      # — verified in the guest, where a transient user unit saw all three
+      # unset — and the user service below has to be given them explicitly.
+      # VLLM_API_KEY in particular is not optional: the adapter resolves the
+      # variable named by apiKeyEnv and errors at dispatch when it is missing.
+      dshEnv = {
+        # The microvm is the isolation boundary, so dsh's own sandbox is off and
+        # nothing prompts for approval. bwrap is deliberately absent for the same
+        # reason.
+        DSH_PERMISSION_MODE = "danger-full-access";
+
+        # Telemetry is off by default, but this also suppresses the anonymous
+        # user id that would otherwise be stamped on every provider request —
+        # including the ones going to our own endpoint. Any non-empty value is an
+        # authoritative opt-out.
+        DSH_TELEMETRY_DISABLED = "1";
+
+        # The endpoint wants no key, but the adapter still resolves the variable
+        # named by apiKeyEnv and errors when it is unset.
+        VLLM_API_KEY = "not-required";
+      };
+
       # Where the launcher's virtiofs share lands. Root-only, so the agent
       # cannot read the key out of it — which matters only because the agent
       # no longer has a route to root; see guest/base.nix.
@@ -252,6 +277,13 @@
       # which address the browser asked for.
       dsh-web = pkgs.writeShellApplication {
         name = "dsh-web";
+
+        # Not merely belt-and-braces: systemd hands a user unit a minimal PATH
+        # of its own — coreutils, findutils, grep, sed, systemd — so `dsh`
+        # would not be found when this runs as the service below, however it
+        # resolves in an interactive shell.
+        runtimeInputs = [ dshPkg ];
+
         text = ''
           # --no-open because there is no browser in the guest. Reachable two
           # ways once this is running:
@@ -293,7 +325,7 @@
 
     {
       environment.systemPackages = [
-        inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.dsh
+        dshPkg
         # `dsh plugin ... add <pkg>` forwards to pnpm, which has to be on PATH
         # for optional bundles (the subagent-codex and subagent-claude-code
         # providers, a third-party TUI) to be installable at all.
@@ -307,22 +339,7 @@
       # on every boot, so there is nothing to carry across and nothing to keep in
       # sync with a host dotfile.
 
-      environment.variables = {
-        # The microvm is the isolation boundary, so dsh's own sandbox is off and
-        # nothing prompts for approval. bwrap is deliberately absent for the same
-        # reason.
-        DSH_PERMISSION_MODE = "danger-full-access";
-
-        # Telemetry is off by default, but this also suppresses the anonymous
-        # user id that would otherwise be stamped on every provider request —
-        # including the ones going to our own endpoint. Any non-empty value is an
-        # authoritative opt-out.
-        DSH_TELEMETRY_DISABLED = "1";
-
-        # The endpoint wants no key, but the adapter still resolves the variable
-        # named by apiKeyEnv and errors when it is unset.
-        VLLM_API_KEY = "not-required";
-      };
+      environment.variables = dshEnv;
 
       # Only the TLS front end is published. dsh's own listener stays on
       # loopback, reachable through an ssh tunnel and nothing else.
@@ -417,6 +434,31 @@
       # ConditionPathExists rather than a shell test, so a launch with no
       # certificate skips the unit entirely instead of running a no-op — the
       # skip is then visible in `systemctl status` rather than silent.
+      # Deliberately no wantedBy: the unit exists to be started by hand and
+      # nothing pulls it in, so a guest boots without a web UI listening. Note
+      # that `systemctl --user enable` on it would not do what the name
+      # suggests — enabling is linking into a target, which is precisely the
+      # autostart being avoided. `systemctl --user start dsh-web` is the whole
+      # interface, with `journalctl --user -u dsh-web` for its output.
+      #
+      # The dsh-web command stays on PATH as well, for a one-off run with the
+      # output in front of you. Only one of the two can hold port 3080 at a
+      # time; the loser exits with an address-in-use error, which is clear
+      # enough not to need guarding against.
+      systemd.user.services.dsh-web = {
+        description = "dsh web UI";
+        serviceConfig = {
+          Type = "exec";
+          ExecStart = lib.getExe dsh-web;
+          Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
+          WorkingDirectory = "%h";
+
+          # Started by hand, so a crash should stay crashed and be visible in
+          # the journal rather than being papered over by a restart loop.
+          Restart = "no";
+        };
+      };
+
       systemd.services = {
         dsh-web-tls-vault = {
           description = "Install the Vault-issued dsh web UI certificate";
