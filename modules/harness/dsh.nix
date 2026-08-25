@@ -278,10 +278,10 @@
       dsh-web = pkgs.writeShellApplication {
         name = "dsh-web";
 
-        # Not merely belt-and-braces: systemd hands a user unit a minimal PATH
-        # of its own — coreutils, findutils, grep, sed, systemd — so `dsh`
-        # would not be found when this runs as the service below, however it
-        # resolves in an interactive shell.
+        # Pins the exact dsh this module was built against rather than taking
+        # whatever `dsh` the ambient PATH resolves to. The unit below now runs
+        # through a login shell, so a bare name would resolve — this is about
+        # which build answers, not whether one does.
         runtimeInputs = [ dshPkg ];
 
         text = ''
@@ -492,7 +492,38 @@
           description = "dsh web UI";
           serviceConfig = {
             Type = "exec";
-            ExecStart = lib.getExe dsh-web;
+
+            # Started through a login shell, which is the whole point of the
+            # line rather than an affectation.
+            #
+            # An agent harness spawns things: `bash` for every shell tool, git,
+            # node, whatever the task calls for. NixOS renders an explicit
+            # Environment="PATH=..." onto a user unit — coreutils, findutils,
+            # grep, sed, systemd and nothing else — and that overrides the user
+            # manager's own environment. dsh's bash tool therefore failed with
+            #
+            #   Error: spawn bash ENOENT
+            #
+            # which takes the whole toolchain with it: no tests, no commits, no
+            # background jobs. There is not even a `sh` on that PATH.
+            #
+            # `bash -l` sources /etc/profile, which *replaces* PATH rather than
+            # appending to it, and brings the rest of the session environment
+            # with it — LOCALE_ARCHIVE, TZDIR, NIX_PATH. That makes the service
+            # equivalent to what `ssh permafrost && dsh-web` always gave, which
+            # is what this unit displaced. Verified against a unit pinned to the
+            # real minimal PATH: without -l, `git` is not found; with it, PATH
+            # is the full login PATH and bash, git and node all resolve.
+            #
+            # `exec` so bash replaces itself: MainPID stays the server, and
+            # Type=exec and `systemctl stop` keep their usual meaning.
+            #
+            # Absolute path to bash because, at the moment this line runs, the
+            # minimal PATH is still in force and there is no shell on it.
+            ExecStart = "${lib.getExe pkgs.bashInteractive} -l -c 'exec ${lib.getExe dsh-web}'";
+
+            # dsh's own three. A login shell does not touch these, and the
+            # PATH systemd renders alongside them is superseded above.
             Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
             WorkingDirectory = "%h";
 
