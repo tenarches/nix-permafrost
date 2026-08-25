@@ -15,8 +15,11 @@
   # guest/theme.nix sets — so herdr matches tmux and nixvim without stylix
   # needing a herdr target.
   #
-  # Nothing under ~/.herdr is a permafrost.share. Worktrees and session state
-  # die with the guest, like the rest of its workspace.
+  # None of herdr's state is a permafrost.share, deliberately: worktrees and
+  # session state die with the guest, like the rest of its workspace, and
+  # session.json records absolute worktree paths that would not survive the trip
+  # anyway. What the guest keeps is a fully writable copy — see the activation
+  # script below.
   flake.modules.homeManager.agent-herdr =
     {
       pkgs,
@@ -82,6 +85,26 @@
     {
       home.packages = [ pkgs.herdr ];
 
-      xdg.configFile."herdr/config.toml".source = checkedConfig;
+      # Copied, not symlinked. xdg.configFile puts a link to the read-only store
+      # here, and herdr writes this file back whenever a setting is changed from
+      # inside the TUI — which failed on a read-only filesystem, taking the
+      # Settings screen with it. It is the only path under ~/.config/herdr that
+      # was not already writable: the two sockets, both logs, .plugins.lock and
+      # session.json are all created by herdr at runtime, as is the
+      # agent-detection manifest cache under ~/.local/state/herdr.
+      #
+      # The copy is per-boot, so the Nix-rendered baseline — and with it the
+      # build-time `herdr config check` above — still decides what a fresh guest
+      # starts with. Edits last the life of the session and go with it. Nothing
+      # is shared to the host.
+      #
+      # rm -f before install because the destination may be a symlink into the
+      # store from an earlier generation, and install would follow it and fail
+      # against a read-only path rather than replace it.
+      home.activation.herdrConfig = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        run ${pkgs.coreutils}/bin/rm -f "${config.xdg.configHome}/herdr/config.toml"
+        run ${pkgs.coreutils}/bin/install -Dm0644 \
+          ${checkedConfig} "${config.xdg.configHome}/herdr/config.toml"
+      '';
     };
 }
