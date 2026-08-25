@@ -28,27 +28,37 @@ What is set up for you:
 
 ---
 
-## 2. The one thing to understand first: nothing persists
+## 2. The one thing to understand first: the guest is disposable
 
 The `permafrost` guest is rebuilt from scratch on each boot. Its entire home
 directory is a fresh disk image; when the VM stops, it is deleted.
 
-**Anything you create inside the VM is gone when it stops.** That includes your session
-history, anything you `git clone`, and any edit you make to dsh's own configuration.
+**Assume anything you create inside the VM is gone when it stops.** That includes anything
+you `git clone` and any edit you make to dsh's own configuration. This is deliberate — it
+is what makes it safe to run an agent with no sandbox — so the workflow is *push your work
+out before you stop the VM*. `git push` to a real remote, or copy it out over ssh.
 
-This is deliberate — it is what makes it safe to run an agent with no sandbox — but it
-means the workflow is *push your work out before you stop the VM*. `git push` to a real
-remote, or copy it out over ssh.
+A short list of paths is exempt, because they are host directories mounted into the guest
+over virtiofs. Writes to these land on your actual machine:
 
-Two exceptions, both host directories mounted into the guest:
+| Path in the guest | What it is |
+|---|---|
+| `~/.agents` | The host's real `~/.agents` — skills and instructions every harness reads |
+| `~/.dsh/sessions` | Your conversation history |
+| `~/.dsh/attachments` | The blobs those sessions reference |
+| `~/.dsh/storages` | The web UI's own state — workspace list, session cache |
 
-- `~/.agents` — shared into the guest, and it is **the host's real `~/.agents`**.
-  Writes here land on your actual machine.
-- `~/workspace` — despite the name, this is *not* shared. It is a private, ephemeral
-  directory on the guest's own disk.
+The three under `~/.dsh` are there so a long-horizon task can be picked up again after a
+shutdown. Everything *else* under `~/.dsh` is deliberately not shared and comes back
+Nix-fresh on every boot — `settings.yaml`, `cordis.patch.yml`, `skills/` and `profiles/`.
+[§6](#6-how-dsh-is-configured) has the full tree and the reasoning.
 
-Unlike the other harnesses in this guest, `dsh` maps no host directories of its own. Its whole
-configuration is generated from Nix and copied in fresh on every boot.
+Two paths that look like they should be on that list and are not:
+
+- `~/workspace` — despite the name, this is **not** a share of the host's. It is a private,
+  ephemeral directory on the guest's own disk, and it is wiped with everything else.
+- `~/.dsh/profiles` — regenerated on every launch, and mostly a farm of symlinks into the
+  guest's own Nix store, which would mean nothing on the host.
 
 ---
 
@@ -102,27 +112,43 @@ non-zero otherwise. No server, no port, nothing to clean up. Good for scripting.
 
 ### The browser UI
 
-There is no terminal UI, so anything interactive happens in a browser. One helper ships
-in the guest, and there are two ways to reach what it serves.
+There is no terminal UI, so anything interactive happens in a browser. You start a server
+in the guest, then reach it from the host.
+
+#### Starting it
+
+The server does not autostart — a guest boots with no web UI listening. Start it by hand:
 
 ```bash
 ssh permafrost
-dsh-web          # leave this running; it does not open a browser, there isn't one here
+systemctl --user start dsh-web     # returns immediately; runs until stopped
 ```
 
+and to watch it, or stop it:
+
+```bash
+journalctl --user -u dsh-web -f
+systemctl --user stop dsh-web
+```
+
+The same command is also on `PATH` as `dsh-web`, if you would rather have the output in
+front of you than in the journal. It runs in the foreground; `Ctrl-C` stops it. Only one of
+the two can hold port 3080, so the second one you start exits with an address-in-use error.
+
+> `systemctl --user enable dsh-web` is not the missing step — it prints an explanation and
+> does nothing. The unit has no `[Install]` section on purpose, because enabling *is*
+> linking into a target, which is exactly the autostart being avoided. Start it per boot.
+
+Two footnotes on the foreground form. `Ctrl-C` reaches dsh's MCP child processes as well as
+dsh, and one of them — `mcp-server-time` — has no `KeyboardInterrupt` guard, so it prints a
+long Python traceback on the way out. It is noise, not a failure. The service does not do
+this: `systemctl stop` sends `SIGTERM`, which Python takes without an exception.
+
+#### Reaching it
+
 **Over TLS, no tunnel.** Open <https://192.168.33.10:3443> from the host. The guest runs
-caddy in front of `dsh-web`, and where its certificate came from decides whether your
-browser says anything:
-
-- **If you were logged into Vault when you launched**, the launcher issued a certificate
-  from `pki_int_homelab` and the page just opens. That chain is already in your host's
-  trust store, so there is no prompt at all.
-- **Otherwise** the guest self-signed one, and you get the usual interstitial. Accept it —
-  see the warning below for why plain `http` is not an alternative.
-
-Nothing needs configuring to pick between them. `nix run .#permafrost` tries Vault, says
-which way it went, and carries on either way; a launch never fails because Vault was
-unreachable or your token had expired.
+caddy in front of the server; whether your browser says anything depends on where the
+certificate came from, which is [below](#where-the-certificate-comes-from).
 
 **Over an ssh tunnel.** From the host:
 
@@ -142,52 +168,58 @@ treatment `https` does.
 > Loading the provider directory failed: crypto.randomUUID is not a function
 > ```
 >
-> and Agent preset, Models and everything behind them stay empty. That is the whole
-> reason for the TLS front end; there is no dsh setting that avoids it.
->
-> **The self-signed fallback asks on every launch.** The guest is rebuilt from scratch
-> each boot, and the certificate with it. Clicking through still gives you an `https`
-> origin, which is all the page needs.
->
-> That fallback is a bare self-signed leaf — no certificate authority anywhere in it, and
-> nothing added to a trust store on the guest or your host. It is generated by the caddy
-> service's own first act, as the unprivileged `caddy` user, inside the state directory
-> systemd hands it.
->
-> **The Vault path avoids the prompt entirely.** `nix run .#permafrost` calls
-> `pki_int_homelab/issue/permafrost-guest` as you, before the guest starts, and passes the
-> result in over a one-shot share that is destroyed with the VM. The guest never talks to
-> Vault and holds no Vault credential — it receives one leaf, for one address, and that is
-> all it could ever leak. Override `VAULT_ADDR`, `VAULT_PKI_MOUNT`, `VAULT_PKI_ROLE`,
-> `VAULT_TLS_CN` or `VAULT_TLS_TTL` in the environment if your CA is arranged differently;
-> `sudo -E` or `~/.vault-token` both work for the token.
->
-> The launch line reports the validity Vault actually granted rather than what was asked
-> for, because a `ttl` beyond the role's `max_ttl` is capped rather than refused — and
-> repeats any warning Vault returns, which is where that capping shows up.
+> and Agent preset, Models and everything behind them stay empty. That is the whole reason
+> for the TLS front end; there is no dsh setting that avoids it.
 
-> **The certificate cannot be revoked, by design.** The `permafrost-guest` role sets
-> `no_store=true`, so Vault keeps no copy and there is no serial to revoke against. That
-> is deliberate on two counts. Revoking at shutdown was never going to work — a task that
-> runs for days outlives the token that would have to authorise it, and there is no
-> unauthenticated revocation path (`revoke-with-key` is unprivileged in the sense of not
-> needing the revoke capability, but it still needs a token). And with storage off, the
-> mount's unauthenticated `cert/*` path no longer hands out every certificate this guest
-> has ever been issued.
->
-> What bounds a leaked key instead: its TTL, a single SAN on a host-local bridge address,
-> `client_flag=false` so it cannot be presented as a client certificate anywhere, and a
-> guest in which the agent has no route to root and so cannot read it.
+#### Where the certificate comes from
 
-> **What is exposed.** Only port `3443` is open. dsh's own listener stays on the guest's
-> loopback, so the plaintext UI is not on the bridge at all. `192.168.33.0/24` is a bridge
-> that exists only on your host and is NAT'd outbound, so the TLS port is reachable from
-> the host and anything else that joins that bridge — not from the internet. It is still
-> worth knowing this UI drives an agent with its sandbox off.
->
-> Requests are additionally fenced on their `Host` header. `dsh-web` passes
-> `--trusted-host 192.168.33.10` so the address caddy forwards under is accepted; a
-> request arriving with any other `Host` gets `403 forbidden`.
+Nothing needs configuring to pick between the two paths. `nix run .#permafrost` tries
+Vault, says which way it went, and carries on either way; a launch never fails because
+Vault was unreachable or your token had expired.
+
+**If you were logged into Vault when you launched**, the launcher called
+`pki_int_homelab/issue/permafrost-guest` as you, before the guest started, and passed the
+result in over a one-shot share destroyed with the VM. That chain is already in your host's
+trust store, so the page opens with no prompt at all. The guest never talks to Vault and
+holds no Vault credential — it receives one leaf, for one address, and that is all it could
+ever leak. Override `VAULT_ADDR`, `VAULT_PKI_MOUNT`, `VAULT_PKI_ROLE`, `VAULT_TLS_CN` or
+`VAULT_TLS_TTL` in the environment if your CA is arranged differently; `sudo -E` or
+`~/.vault-token` both work for the token. The launch line reports the validity Vault
+actually granted rather than what was asked for, because a `ttl` beyond the role's
+`max_ttl` is capped rather than refused — and repeats any warning Vault returns, which is
+where that capping shows up.
+
+**Otherwise the guest self-signs**, and you get the usual interstitial on every launch,
+because the guest and its certificate are both rebuilt each boot. Clicking through still
+gives you an `https` origin, which is all the page needs. That fallback is a bare
+self-signed leaf — no certificate authority anywhere in it, and nothing added to a trust
+store on the guest or your host. It is generated by the caddy service's own first act, as
+the unprivileged `caddy` user, inside the state directory systemd hands it.
+
+**Neither certificate can be revoked, by design.** The `permafrost-guest` role sets
+`no_store=true`, so Vault keeps no copy and there is no serial to revoke against. That is
+deliberate on two counts. Revoking at shutdown was never going to work — a task that runs
+for days outlives the token that would have to authorise it, and there is no
+unauthenticated revocation path (`revoke-with-key` is unprivileged in the sense of not
+needing the revoke capability, but it still needs a token). And with storage off, the
+mount's unauthenticated `cert/*` path no longer hands out every certificate this guest has
+ever been issued. What bounds a leaked key instead: its TTL, a single SAN on a host-local
+bridge address, `client_flag=false` so it cannot be presented as a client certificate
+anywhere, and a guest in which the agent has no route to root and so cannot read it.
+
+#### What is exposed
+
+`3443` is the only port this harness opens — the guest's firewall allows that and `22`, and
+nothing else. dsh's own listener stays on the guest's loopback, so the plaintext UI is not
+on the bridge at all. `192.168.33.0/24` is a bridge that exists only on
+your host and is NAT'd outbound, so the TLS port is reachable from the host and anything
+else that joins that bridge — not from the internet. It is still worth knowing this UI
+drives an agent with its sandbox off.
+
+Requests are additionally fenced on their `Host` header. The server is started with
+`--trusted-host 192.168.33.10` and `--trusted-host permafrost.home.lan`, so the address
+caddy forwards under is accepted; a request arriving with any other `Host` gets
+`403 forbidden`.
 
 ---
 
@@ -250,7 +282,8 @@ That matters: dsh rewrites files under `~/.dsh` on every boot, and the web UI wr
 `settings.yaml` in place, so read-only files there would break it.
 
 The upshot is a nice property: you get a declarative baseline you can freely edit at
-runtime, reset on every boot.
+runtime, reset on every boot. Your *conversations* are not part of that reset — see the
+tree below.
 
 ### What lives under `~/.dsh`
 
@@ -433,7 +466,8 @@ installed, and network access. Not tried here.
 
 | Path | Role |
 |---|---|
-| `modules/harness/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the firewall port |
+| `modules/harness/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the `dsh-web` user service, the three data shares, the firewall port |
+| `modules/guest/shares.nix` | How a `permafrost.shares` entry becomes a mount and a symlink |
 | `modules/_lib/models.nix` | The shared model catalogue — endpoint, models, thinking budgets |
 | `modules/guest/identity.nix` | The guest's address, `permafrost.identity.ip = 192.168.33.10` |
 | `flake.nix` | The `agent-skills` and `llm-agents` inputs |
@@ -474,8 +508,18 @@ your own.
 **`crypto.randomUUID is not a function`.** You are on a plain-http origin that is not
 localhost. Use <https://192.168.33.10:3443> or the tunnel — see [§4](#the-browser-ui).
 
-**502 from <https://192.168.33.10:3443>.** caddy is up but `dsh-web` is not running in the
-guest. Start it.
+**502 from <https://192.168.33.10:3443>.** caddy is up but the server is not running in the
+guest — expected on a fresh boot, since it does not autostart. `ssh permafrost` and
+`systemctl --user start dsh-web`, then `systemctl --user status dsh-web` if it does not
+come up.
+
+**`Address already in use` on port 3080.** The service and the foreground `dsh-web` command
+are the same server and cannot both hold the port. `systemctl --user status dsh-web` says
+whether the service already has it.
+
+**A Python traceback when you `Ctrl-C` the foreground `dsh-web`.** Expected, and harmless:
+`Ctrl-C` reaches dsh's MCP children too, and `mcp-server-time` does not guard
+`KeyboardInterrupt`. `systemctl --user stop dsh-web` exits silently instead.
 
 **The VM will not start.** `sudo nix run .#permafrost` needs root, a free `192.168.33.10`,
 and KVM. `nix run .#status` shows whether the guest is already running; `nix run .#gc`
