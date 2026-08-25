@@ -6,27 +6,36 @@
   #
   #   lastlog_openseek: Couldn't stat /var/log/lastlog: No such file or directory
   #
-  # Nothing creates it here. The file is conventionally shipped by the
-  # distribution, and this guest's /var is a fresh volume on every boot.
+  # Something does create it: systemd's own var.conf ships
   #
-  # Creating it is only half the fix, and on its own it is self-defeating.
-  # NixOS pulls in lastlog2-import.service whenever any PAM service has
-  # lastlog enabled (nixos/modules/security/pam.nix), to migrate the legacy
-  # file into lastlog2's sqlite database. It is guarded by
+  #   f /var/log/lastlog 0664 root utmp -
+  #
+  # What removed it is lastlog2-import.service, which NixOS pulls in whenever
+  # any PAM service has lastlog enabled (nixos/modules/security/pam.nix), to
+  # migrate the legacy file into lastlog2's sqlite database. It is guarded by
   #
   #   ConditionPathExists=/var/log/lastlog
   #   ExecStartPost=mv /var/log/lastlog /var/log/lastlog.migrated
   #
-  # so a tmpfiles rule alone satisfies the condition, the importer fires, and
-  # the file is renamed away before sshd ever looks for it — leaving the same
-  # warning plus a migration that ran for nothing. Confirmed in a live guest:
-  # the created file reappeared as /var/log/lastlog.migrated, timestamped to
-  # the second the importer ran.
+  # so the condition is met on every boot, the importer fires, and the file is
+  # renamed away before sshd ever looks for it. Confirmed in a live guest: it
+  # reappeared as /var/log/lastlog.migrated, timestamped to the second the
+  # importer ran.
   #
-  # So turn the importer off as well. It is a one-shot upgrade migration and
-  # has nothing to do in a guest whose /var is new on every boot — there has
-  # never been a previous lastlog to carry forward. pam_lastlog2 keeps
-  # recording logins either way; only the migration is disabled.
+  # So masking the importer is the entire fix. It is a one-shot upgrade
+  # migration and has nothing to do in a guest whose /var is new on every boot
+  # — there has never been a previous lastlog to carry forward. pam_lastlog2
+  # keeps recording logins either way; only the migration is disabled.
+  #
+  # Deliberately *no* tmpfiles rule of our own. One was added here first, and
+  # it collided: systemd.tmpfiles.rules lands in 00-nixos.conf, which sorts
+  # ahead of var.conf, so ours won and systemd's was discarded with
+  #
+  #   /etc/tmpfiles.d/var.conf:17: Duplicate line for path "/var/log/lastlog",
+  #     ignoring.
+  #
+  # twice per boot — the original warning traded for a new one, and the file
+  # created 0644 root:root instead of 0664 root:utmp.
   #
   # mkForce because pam.nix asserts `true` unconditionally alongside the unit
   # it defines, so this is a genuine override rather than a default being
@@ -36,9 +45,6 @@
   flake.modules.nixos.guest-lastlog =
     { lib, ... }:
     {
-      systemd = {
-        tmpfiles.rules = [ "f /var/log/lastlog 0644 root root -" ];
-        services.lastlog2-import.enable = lib.mkForce false;
-      };
+      systemd.services.lastlog2-import.enable = lib.mkForce false;
     };
 }
