@@ -155,12 +155,29 @@ treatment `https` does.
 > systemd hands it.
 >
 > **The Vault path avoids the prompt entirely.** `nix run .#permafrost` calls
-> `pki_int_homelab/issue/home-lan` as you, before the guest starts, and passes the result
-> in over a one-shot share that is destroyed with the VM. The guest never talks to Vault
-> and holds no Vault credential — it receives one leaf, for one address, and that is all
-> it could ever leak. Override `VAULT_ADDR`, `VAULT_PKI_MOUNT`, `VAULT_PKI_ROLE`,
+> `pki_int_homelab/issue/permafrost-guest` as you, before the guest starts, and passes the
+> result in over a one-shot share that is destroyed with the VM. The guest never talks to
+> Vault and holds no Vault credential — it receives one leaf, for one address, and that is
+> all it could ever leak. Override `VAULT_ADDR`, `VAULT_PKI_MOUNT`, `VAULT_PKI_ROLE`,
 > `VAULT_TLS_CN` or `VAULT_TLS_TTL` in the environment if your CA is arranged differently;
 > `sudo -E` or `~/.vault-token` both work for the token.
+>
+> The launch line reports the validity Vault actually granted rather than what was asked
+> for, because a `ttl` beyond the role's `max_ttl` is capped rather than refused — and
+> repeats any warning Vault returns, which is where that capping shows up.
+
+> **The certificate cannot be revoked, by design.** The `permafrost-guest` role sets
+> `no_store=true`, so Vault keeps no copy and there is no serial to revoke against. That
+> is deliberate on two counts. Revoking at shutdown was never going to work — a task that
+> runs for days outlives the token that would have to authorise it, and there is no
+> unauthenticated revocation path (`revoke-with-key` is unprivileged in the sense of not
+> needing the revoke capability, but it still needs a token). And with storage off, the
+> mount's unauthenticated `cert/*` path no longer hands out every certificate this guest
+> has ever been issued.
+>
+> What bounds a leaked key instead: its TTL, a single SAN on a host-local bridge address,
+> `client_flag=false` so it cannot be presented as a client certificate anywhere, and a
+> guest in which the agent has no route to root and so cannot read it.
 
 > **What is exposed.** Only port `3443` is open. dsh's own listener stays on the guest's
 > loopback, so the plaintext UI is not on the bridge at all. `192.168.33.0/24` is a bridge

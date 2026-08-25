@@ -181,7 +181,7 @@ pkgs.writeShellScriptBin identity.name ''
   # here, and a mismatch should be a one-line fix rather than a flake edit.
   VAULT_ADDR="''${VAULT_ADDR:-https://vault.service.consul:8200}"
   VAULT_PKI_MOUNT="''${VAULT_PKI_MOUNT:-pki_int_homelab}"
-  VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-home-lan}"
+  VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-permafrost-guest}"
   VAULT_TLS_CN="''${VAULT_TLS_CN:-${identity.name}.home.lan}"
   # Long enough not to expire under a coding session that runs for days. Well
   # inside the 768h a mount defaults to, so no mount tune is needed — but the
@@ -190,7 +190,6 @@ pkgs.writeShellScriptBin identity.name ''
   VAULT_TLS_TTL="''${VAULT_TLS_TTL:-336h}"
 
   VAULT_TLS_DIR="$SOCKET_DIR/vault-tls"
-  VAULT_TLS_SERIAL=""
 
   # sudo strips VAULT_TOKEN just as it strips SSH_AUTH_SOCK. Fall back to the
   # file the vault CLI itself reads, in the launching user's home.
@@ -232,10 +231,8 @@ pkgs.writeShellScriptBin identity.name ''
     echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.certificate, (.data.ca_chain // [] | .[])' \
       > "$VAULT_TLS_DIR/cert.pem"
     echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.private_key' > "$VAULT_TLS_DIR/key.pem"
-    VAULT_TLS_SERIAL=$(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.serial_number')
-    echo "$VAULT_TLS_SERIAL" > "$VAULT_TLS_DIR/serial"
 
-    chmod 0644 "$VAULT_TLS_DIR/cert.pem" "$VAULT_TLS_DIR/serial"
+    chmod 0644 "$VAULT_TLS_DIR/cert.pem"
     chmod 0600 "$VAULT_TLS_DIR/key.pem"
 
     # Report what Vault granted, not what was asked for. A ttl beyond the
@@ -256,24 +253,6 @@ pkgs.writeShellScriptBin identity.name ''
     done
   }
 
-  # Best-effort, and deliberately so: a stolen leaf for a host-local bridge
-  # address is already bounded by its ttl, and browsers routinely skip CRL and
-  # OCSP for private CAs. This is Vault-side hygiene, not enforcement.
-  revoke_vault_tls() {
-    SERIAL="''${1:-}"
-    [ -n "$SERIAL" ] || return 0
-    resolve_vault_token
-    [ -n "''${VAULT_TOKEN:-}" ] || return 0
-
-    ${pkgs.curl}/bin/curl -sS --max-time 10 \
-      -H "X-Vault-Token: $VAULT_TOKEN" \
-      -X POST \
-      -d "{\"serial_number\":\"$SERIAL\"}" \
-      "$VAULT_ADDR/v1/$VAULT_PKI_MOUNT/revoke" >/dev/null 2>&1 \
-      && echo "Revoked web UI certificate $SERIAL." \
-      || true
-  }
-
   case "$COMMAND" in
     status)
       if systemctl is-active --quiet "$UNIT_NAME"; then
@@ -287,17 +266,8 @@ pkgs.writeShellScriptBin identity.name ''
       exit 0
       ;;
     stop)
-      # Read the serial before stopping: the runtime directory holding it goes
-      # away with the unit, and revoking a certificate we can no longer name
-      # is not possible.
-      if [ -r "$VAULT_TLS_DIR/serial" ]; then
-        STOPPING_SERIAL=$(${pkgs.coreutils}/bin/cat "$VAULT_TLS_DIR/serial" 2>/dev/null || true)
-      else
-        STOPPING_SERIAL=""
-      fi
       echo "Stopping $UNIT_NAME..."
       systemctl stop "$UNIT_NAME"
-      revoke_vault_tls "$STOPPING_SERIAL"
       exit 0
       ;;
     run|start)
@@ -456,12 +426,7 @@ pkgs.writeShellScriptBin identity.name ''
   )
 
   if [ "$COMMAND" = "run" ]; then
-    # --wait blocks until the guest is gone, so this is the run-mode equivalent
-    # of what the stop subcommand does. The serial is held in a variable rather
-    # than read back from disk: the runtime directory is already gone by the
-    # time this line runs.
-    systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND" || true
-    revoke_vault_tls "$VAULT_TLS_SERIAL"
+    systemd-run --pty --wait "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
   else
     systemd-run "''${RUN_ARGS[@]}" ${pkgs.bash}/bin/bash -c "$LAUNCH_COMMAND"
     echo "${identity.name} started in background (unit: $UNIT_NAME)."
