@@ -183,7 +183,11 @@ pkgs.writeShellScriptBin identity.name ''
   VAULT_PKI_MOUNT="''${VAULT_PKI_MOUNT:-pki_int_homelab}"
   VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-home-lan}"
   VAULT_TLS_CN="''${VAULT_TLS_CN:-${identity.name}.home.lan}"
-  VAULT_TLS_TTL="''${VAULT_TLS_TTL:-12h}"
+  # Long enough not to expire under a coding session that runs for days. Well
+  # inside the 768h a mount defaults to, so no mount tune is needed — but the
+  # role's own max_ttl still caps it, and Vault caps rather than refuses, so
+  # what actually gets granted is reported below rather than assumed here.
+  VAULT_TLS_TTL="''${VAULT_TLS_TTL:-336h}"
 
   VAULT_TLS_DIR="$SOCKET_DIR/vault-tls"
   VAULT_TLS_SERIAL=""
@@ -234,7 +238,22 @@ pkgs.writeShellScriptBin identity.name ''
     chmod 0644 "$VAULT_TLS_DIR/cert.pem" "$VAULT_TLS_DIR/serial"
     chmod 0600 "$VAULT_TLS_DIR/key.pem"
 
-    echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE (ttl $VAULT_TLS_TTL)."
+    # Report what Vault granted, not what was asked for. A ttl beyond the
+    # role's max_ttl is capped, not refused: the response is still 200 and the
+    # truncation appears only in .warnings. Echoing the request back would
+    # describe a certificate good for hours as one good for weeks, and the
+    # first anyone would know is the browser complaining mid-session.
+    EXPIRY=$(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.expiration // empty')
+    if [ -n "$EXPIRY" ]; then
+      echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE, valid until $(${pkgs.coreutils}/bin/date -d "@$EXPIRY" '+%Y-%m-%d %H:%M %Z')."
+    else
+      echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE."
+    fi
+
+    # Vault's own words, when it has any — this is where a capped ttl shows up.
+    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.warnings // [] | .[]' | while IFS= read -r WARNING; do
+      [ -n "$WARNING" ] && echo "  Vault: $WARNING" >&2
+    done
   }
 
   # Best-effort, and deliberately so: a stolen leaf for a host-local bridge
