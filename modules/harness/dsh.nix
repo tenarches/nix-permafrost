@@ -334,10 +334,45 @@
         pkgs.yq-go
       ];
 
-      # No permafrost.shares. Nothing of this harness's own reaches the host: its
-      # whole configuration is generated above and copied into the ephemeral home
-      # on every boot, so there is nothing to carry across and nothing to keep in
-      # sync with a host dotfile.
+      # This harness's *configuration* is generated above and copied into the
+      # ephemeral home on every boot, so none of it is shared. Its *data* is a
+      # different matter: the sessions directory is the conversation history, and
+      # sealing it into the guest means a long-horizon task cannot be resumed
+      # after a shutdown.
+      #
+      # Three narrow shares rather than one on ~/.dsh, because the rest of that
+      # directory has to stay ephemeral. Observed in a used guest:
+      #
+      #   settings.yaml, cordis.patch.yml  installed from the store by the
+      #                                    activation script below, so a share
+      #                                    would have the guest rewrite the
+      #                                    host's copies on every boot
+      #   skills/                          the same, except the script `rm -rf`s
+      #                                    it first — on a share that deletes a
+      #                                    host directory
+      #   profiles/                        1.8M of symlinks into the guest's own
+      #                                    /nix/store, meaningless on the host
+      #                                    and dangling the moment a path is
+      #                                    garbage-collected
+      permafrost.shares = [
+        {
+          # Conversation history, zstd-compressed JSONL, one directory per
+          # workspace path. 14M after a day's use — the large one of the three.
+          host = ".dsh/sessions";
+          guest = ".dsh/sessions";
+        }
+        {
+          # Content-addressed blobs the sessions reference. Has to travel with
+          # them, or restored history comes back with holes in it.
+          host = ".dsh/attachments";
+          guest = ".dsh/attachments";
+        }
+        {
+          # Web UI state: the workspace list and the session/project cache.
+          host = ".dsh/storages";
+          guest = ".dsh/storages";
+        }
+      ];
 
       environment.variables = dshEnv;
 
@@ -445,57 +480,66 @@
       # output in front of you. Only one of the two can hold port 3080 at a
       # time; the loser exits with an address-in-use error, which is clear
       # enough not to need guarding against.
-      systemd.user.services.dsh-web = {
-        description = "dsh web UI";
-        serviceConfig = {
-          Type = "exec";
-          ExecStart = lib.getExe dsh-web;
-          Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
-          WorkingDirectory = "%h";
+      systemd = {
+        # The share symlinks land *inside* ~/.dsh, which nothing else creates this
+        # early. Left to itself systemd-tmpfiles would make that parent as part of
+        # the symlink line — root:root 0755 — and the activation script below,
+        # which runs as the agent, could then not write settings.yaml into it.
+        # Rules are applied in path order, so this holds whichever line comes first.
+        tmpfiles.rules = [ "d /home/agent/.dsh 0700 agent users - -" ];
 
-          # Started by hand, so a crash should stay crashed and be visible in
-          # the journal rather than being papered over by a restart loop.
-          Restart = "no";
-        };
-      };
-
-      systemd.services = {
-        dsh-web-tls-vault = {
-          description = "Install the Vault-issued dsh web UI certificate";
-          before = [ "caddy.service" ];
-          requiredBy = [ "caddy.service" ];
-          unitConfig = {
-            # Without this the condition below is evaluated before the
-            # virtiofs share is mounted, the unit skips, and a certificate
-            # that was delivered is silently replaced by a self-signed one.
-            RequiresMountsFor = vaultTlsDir;
-            ConditionPathExists = "${vaultTlsDir}/cert.pem";
-          };
+        user.services.dsh-web = {
+          description = "dsh web UI";
           serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
+            Type = "exec";
+            ExecStart = lib.getExe dsh-web;
+            Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
+            WorkingDirectory = "%h";
+
+            # Started by hand, so a crash should stay crashed and be visible in
+            # the journal rather than being papered over by a restart loop.
+            Restart = "no";
           };
-          script = ''
-            install -d -m 0750 -o caddy -g caddy ${tlsDir}
-            install -m 0444 -o caddy -g caddy ${vaultTlsDir}/cert.pem ${tlsDir}/cert.pem
-            install -m 0400 -o caddy -g caddy ${vaultTlsDir}/key.pem ${tlsDir}/key.pem
-          '';
         };
 
-        caddy = {
-          # Unchanged, and load-bearing precisely because it is idempotent:
-          # when the unit above has run, both files already exist and this
-          # exits 0 without generating anything. When it has not, the
-          # self-signed path fires exactly as it did before Vault existed.
-          preStart = "${lib.getExe tlsCert}";
+        services = {
+          dsh-web-tls-vault = {
+            description = "Install the Vault-issued dsh web UI certificate";
+            before = [ "caddy.service" ];
+            requiredBy = [ "caddy.service" ];
+            unitConfig = {
+              # Without this the condition below is evaluated before the
+              # virtiofs share is mounted, the unit skips, and a certificate
+              # that was delivered is silently replaced by a self-signed one.
+              RequiresMountsFor = vaultTlsDir;
+              ConditionPathExists = "${vaultTlsDir}/cert.pem";
+            };
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+            };
+            script = ''
+              install -d -m 0750 -o caddy -g caddy ${tlsDir}
+              install -m 0444 -o caddy -g caddy ${vaultTlsDir}/cert.pem ${tlsDir}/cert.pem
+              install -m 0400 -o caddy -g caddy ${vaultTlsDir}/key.pem ${tlsDir}/key.pem
+            '';
+          };
 
-          serviceConfig = {
-            # Both come from the unit caddy ships and neither is wanted:
-            # ${toString tlsPort} is above 1024, and a reverse proxy has no
-            # business holding CAP_NET_ADMIN. An empty assignment in the
-            # drop-in resets the list the packaged unit set.
-            AmbientCapabilities = [ "" ];
-            CapabilityBoundingSet = [ "" ];
+          caddy = {
+            # Unchanged, and load-bearing precisely because it is idempotent:
+            # when the unit above has run, both files already exist and this
+            # exits 0 without generating anything. When it has not, the
+            # self-signed path fires exactly as it did before Vault existed.
+            preStart = "${lib.getExe tlsCert}";
+
+            serviceConfig = {
+              # Both come from the unit caddy ships and neither is wanted:
+              # ${toString tlsPort} is above 1024, and a reverse proxy has no
+              # business holding CAP_NET_ADMIN. An empty assignment in the
+              # drop-in resets the list the packaged unit set.
+              AmbientCapabilities = [ "" ];
+              CapabilityBoundingSet = [ "" ];
+            };
           };
         };
       };

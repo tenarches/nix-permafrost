@@ -265,9 +265,15 @@ Observed after a real run:
 │   ├── web/               rewritten by dsh on every boot — do not manage this
 │   ├── headless/
 │   └── node_modules/      symlink farm, healed on every launch
-├── sessions/              conversation logs, zstd-compressed JSONL
-└── storages/              web UI state
+├── attachments/           SHARED — blobs the sessions reference
+├── sessions/              SHARED — conversation logs, zstd-compressed JSONL
+└── storages/              SHARED — web UI state
 ```
+
+The three marked `SHARED` are `permafrost.shares` entries: symlinks into `/mnt/persist`,
+backed by `~/.dsh/<name>` on the host, and they outlive the guest. Everything else in the
+tree is rebuilt on every boot — see [usage.md](usage.md#2-persistent-shares-mutable) for why
+the split falls where it does.
 
 To see the fully composed plugin tree, with every layer applied:
 

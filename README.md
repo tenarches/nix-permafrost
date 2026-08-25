@@ -246,23 +246,29 @@ under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot
 a sparse image is 27–52 ms, and swap is initialised by writing only a header host-side
 (`mkswap`, ~7 ms) rather than `dd`-ing 8 GiB through virtio-blk on every boot.
 
-The ten shares carry an agent's auth and history across a boot that otherwise wipes
+The thirteen shares carry an agent's auth and history across a boot that otherwise wipes
 everything: `.agents` (every harness's skills and instructions, shared by `guest-base.nix`),
 `.claude`, `.config/claude` (mounted as `.claude-config`, linked to `~/.claude.json`),
-`.config/opencode`, `.pi`, `.mcporter`, `.config/crush`, `.local/share/crush`.
-**`~/.dsh` is deliberately not one of them** — dsh rewrites files under it in place (the web
-UI writes `settings.yaml` live, dsh itself rewrites `cordis.patch.yml`-derived state on
-every boot), so a read-only store symlink there would break it. Its whole configuration is
-instead rendered from Nix and *copied* into the ephemeral home on every boot; nothing dsh
-does reaches the host. And the host's `~/workspace` is never mapped at all: the guest gets a
-private, ephemeral `~/workspace` on its own home volume, so nothing an agent checks out or
-builds reaches the host unless it is pushed somewhere.
+`.config/opencode`, `.pi`, `.mcporter`, `.config/crush`, `.local/share/crush`, and
+`.dsh/sessions`, `.dsh/attachments`, `.dsh/storages`.
+
+**`~/.dsh` is shared three directories deep rather than whole.** Its data persists —
+conversation history, the blobs those sessions reference, and the web UI's own state — but
+its *configuration* does not. dsh rewrites files under `~/.dsh` in place (the web UI writes
+`settings.yaml` live, dsh itself rewrites `cordis.patch.yml`-derived state on every boot),
+so that half is rendered from Nix and *copied* into the ephemeral home on each launch,
+coming back fresh every time. `profiles/` stays ephemeral too: it is a symlink farm into the
+guest's own Nix store and means nothing on the host.
+
+The host's `~/workspace` is never mapped at all: the guest gets a private, ephemeral
+`~/workspace` on its own home volume, so nothing an agent checks out or builds reaches the
+host unless it is pushed somewhere.
 
 ```mermaid
 graph TD
     subgraph HOST_FS["Host Filesystem"]
         H_STORE["/nix/store<br/>(immutable)"]
-        H_SHARES["10 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.openclaude,<br/>~/.config/openclaude, ~/.config/opencode,<br/>~/.pi, ~/.mcporter, ~/.config/crush,<br/>~/.local/share/crush"]
+        H_SHARES["13 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.openclaude,<br/>~/.config/openclaude, ~/.config/opencode,<br/>~/.pi, ~/.mcporter, ~/.config/crush,<br/>~/.local/share/crush, ~/.dsh/sessions,<br/>~/.dsh/attachments, ~/.dsh/storages"]
         H_IMG["/var/lib/permafrost/permafrost/*.img<br/>(sparse, wiped each boot)"]
     end
 
@@ -281,7 +287,7 @@ graph TD
         subgraph HOME["/home/agent (btrfs volume, ephemeral)"]
             SYMS["Symlinks into /mnt/persist/*<br/>for each declared share"]
             WS["workspace/<br/>(private, not shared)"]
-            DSH[".dsh/<br/>(rendered from Nix, copied fresh<br/>every boot — never a share)"]
+            DSH[".dsh/<br/>(config rendered from Nix, copied fresh<br/>every boot; sessions, attachments and<br/>storages symlinked into /mnt/persist)"]
             EPHEM["All other dotfiles and caches<br/>(destroyed on exit)"]
         end
 

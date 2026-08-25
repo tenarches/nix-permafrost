@@ -70,7 +70,7 @@ file, never rewrites it, so a symlink is safe.
 ### 2. Persistent Shares (Mutable)
 
 `permafrost.shares` entries map host paths into the guest over virtiofs; they survive VM
-termination. Ten are declared across the guest-wide and per-harness modules:
+termination. Thirteen are declared across the guest-wide and per-harness modules:
 
 | Share | Declared by | Guest path |
 | :--- | :--- | :--- |
@@ -84,13 +84,23 @@ termination. Ten are declared across the guest-wide and per-harness modules:
 | `.mcporter` | `harness/pi.nix` | `~/.mcporter` |
 | `.config/crush` | `harness/crush.nix` | `~/.config/crush` |
 | `.local/share/crush` | `harness/crush.nix` | `~/.local/share/crush` |
+| `.dsh/sessions` | `harness/dsh.nix` | `~/.dsh/sessions` — conversation history |
+| `.dsh/attachments` | `harness/dsh.nix` | `~/.dsh/attachments` — blobs those sessions reference |
+| `.dsh/storages` | `harness/dsh.nix` | `~/.dsh/storages` — web UI state |
 
-**`~/.dsh` is deliberately not one of these.** dsh is a plugin-DI launcher that rewrites its
-own composition file on every boot, and its web UI rewrites `settings.yaml` live — a
-read-only virtiofs share (or even a store symlink) under `~/.dsh` would break both. Instead,
-`modules/harness/dsh.nix` renders the same configuration from Nix and an activation script
-*copies* it into the ephemeral home fresh on every boot. Nothing dsh does reaches the host;
-the Nix-rendered defaults simply come back every time the guest restarts.
+**`~/.dsh` is shared three directories deep, not whole**, and the split is deliberate. dsh is
+a plugin-DI launcher that rewrites its own composition file on every boot, and its web UI
+rewrites `settings.yaml` live — a read-only virtiofs share (or even a store symlink) over
+those would break both. So `modules/harness/dsh.nix` renders that half from Nix and an
+activation script *copies* it into the ephemeral home fresh on every boot.
+
+Two more things under `~/.dsh` stay ephemeral for reasons of their own. `skills/` is
+generated the same way, and the activation script `rm -rf`s it first — on a share that would
+delete a host directory. `profiles/` is a symlink farm into the guest's own Nix store, so
+persisting it would only accumulate paths that dangle after the next garbage collection.
+
+What *is* shared is the data: sessions, the attachments they reference, and the web UI's
+state, so a long-horizon task can be resumed after a shutdown.
 
 ### 3. Ephemeral Storage (Destroyed on Restart)
 
@@ -108,7 +118,8 @@ on every VM start**. Nothing here survives a restart.
 
 > **If you need something to survive a restart, put it in `~/.agents` or add a
 > `permafrost.shares` entry to the harness module that needs it.** Work left in
-> `~/workspace` — or, for `dsh`, anywhere under `~/.dsh` — is lost.
+> `~/workspace` — or, for `dsh`, anywhere under `~/.dsh` other than the three shared
+> directories above — is lost.
 
 Images are sparse, so a booted VM occupies well under 1 MiB of host disk and grows only as
 you write.

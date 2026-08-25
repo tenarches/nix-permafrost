@@ -8,8 +8,10 @@
   # What is deliberately *not* here is as important as what is. The host's
   # ~/workspace is never mapped: the guest gets a private ephemeral workspace on
   # its own home volume, so nothing an agent checks out or builds reaches the
-  # host unless it is pushed somewhere. And ~/.dsh is never mapped, for the
-  # opposite reason — see the header of modules/harness/dsh.nix.
+  # host unless it is pushed somewhere. Nor is ~/.dsh mapped whole — that harness
+  # shares three data directories beneath it and keeps the rest ephemeral,
+  # because its configuration is rendered from Nix on every boot. See the
+  # permafrost.shares block in modules/harness/dsh.nix.
   flake.modules.nixos.guest-shares =
     { lib, config, ... }:
     let
