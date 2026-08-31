@@ -19,7 +19,7 @@
   # ~/.claude/hooks/herdr-agent-state.sh specifically. The hook still runs.
   #
   # pi and opencode have no equivalent — the extension and plugin files *are*
-  # the mechanism — so those two store symlinks do land in host-shared
+  # the mechanism — so those two payload copies do land in host-shared
   # directories and outlive the guest. They are inert there: every payload
   # returns early unless HERDR_ENV is 1 and a herdr socket is on the
   # environment. This follows harness/pi.nix, which already places models.json
@@ -49,11 +49,31 @@
             ];
           };
 
-      home-manager.users.agent.home.file = {
-        ".pi/agent/extensions/herdr-agent-state.ts".source =
-          "${integrations}/share/pi/herdr-agent-state.ts";
-        ".config/opencode/plugins/herdr-agent-state.js".source =
-          "${integrations}/share/opencode/herdr-agent-state.js";
-      };
+      # home.file would symlink the payloads read-only into the store, which
+      # `herdr integration install|uninstall` cannot work with: it writes these
+      # exact paths, follows the symlink, and fails on the read-only store —
+      # same for the repair it attempts whenever HERDR_INTEGRATION_VERSION
+      # moves. Copy instead, like home/herdr.nix does for config.toml. The
+      # rm -f matters doubly here: both parent directories are host shares, so
+      # a store symlink left by an earlier guest run persists across boots and
+      # install would otherwise write through it.
+      #
+      # Taken as a function so `lib` is home-manager's own, which carries
+      # lib.hm.dag — same reason as harness/dsh.nix.
+      home-manager.users.agent =
+        { lib, ... }:
+        {
+          home.activation.herdrIntegrations = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+            run ${pkgs.coreutils}/bin/rm -f \
+              "$HOME/.pi/agent/extensions/herdr-agent-state.ts" \
+              "$HOME/.config/opencode/plugins/herdr-agent-state.js"
+            run ${pkgs.coreutils}/bin/install -Dm0644 \
+              ${integrations}/share/pi/herdr-agent-state.ts \
+              "$HOME/.pi/agent/extensions/herdr-agent-state.ts"
+            run ${pkgs.coreutils}/bin/install -Dm0644 \
+              ${integrations}/share/opencode/herdr-agent-state.js \
+              "$HOME/.config/opencode/plugins/herdr-agent-state.js"
+          '';
+        };
     };
 }
