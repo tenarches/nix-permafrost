@@ -56,14 +56,21 @@
         fi
       '';
 
-      # Every herdr pane and tmux pane is an interactive non-login bash, so this
-      # is where the indirection has to be taken up.
-      home-manager.users.agent.programs.bash.initExtra = ''
+      # bashrcExtra rather than initExtra: home-manager places initExtra below
+      # .bashrc's interactive guard, and the dsh web UI's bash tool runs under
+      # `bash -l -c` — a login shell that is not interactive, which sources
+      # .bash_profile → .bashrc but returns at the guard. bashrcExtra sits
+      # above it, so herdr/tmux panes and the web UI's shells alike take up
+      # the indirection.
+      home-manager.users.agent.programs.bash.bashrcExtra = ''
         # Prefer the stable agent socket over whichever one this session was
-        # handed, so the value stays good once that connection is gone. -S
-        # follows the symlink, so a dangling one — a serial console login, or
-        # any session with no forwarding at all — leaves SSH_AUTH_SOCK alone.
-        if [ -S "$HOME/${stableSocket}" ]; then
+        # handed, so the value stays good once that connection is gone. -L not
+        # -S: a link that dangles right now heals under the shell when the
+        # next connection arrives — that is the point of the indirection. Only
+        # a session with no forwarding history at all — a serial console login
+        # on a fresh boot, before any symlink exists — leaves SSH_AUTH_SOCK
+        # alone.
+        if [ -L "$HOME/${stableSocket}" ]; then
           export SSH_AUTH_SOCK="$HOME/${stableSocket}"
         fi
       '';
