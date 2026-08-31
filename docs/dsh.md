@@ -521,6 +521,13 @@ whether the service already has it.
 `Ctrl-C` reaches dsh's MCP children too, and `mcp-server-time` does not guard
 `KeyboardInterrupt`. `systemctl --user stop dsh-web` exits silently instead.
 
+**`Permission denied (publickey)` on `git push` from the web UI or a long-lived pane.** The
+guest has no key of its own; pushes go through `~/.ssh/agent.sock`, a stable symlink to the
+forwarded agent socket (`modules/guest/ssh-agent-socket.nix`). It dangles when the
+connection it pointed at closes, and any new `ssh permafrost` re-points it — open one and
+retry. If a fresh session also has no key, the forwarding itself is off: check
+`ssh agent@192.168.33.10 ssh-add -l` from the host.
+
 **The VM will not start.** `sudo nix run .#permafrost` needs root, a free `192.168.33.10`,
 and KVM. `nix run .#status` shows whether the guest is already running; `nix run .#gc`
 reclaims disk from a guest directory that is gone.

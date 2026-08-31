@@ -66,6 +66,10 @@ file, never rewrites it, so a symlink is safe.
   it and relaunch. `dsh` is the counter-example: its configuration is also rendered from
   Nix, but *copied* rather than symlinked, because dsh and its web UI rewrite files under
   `~/.dsh` in place — see [docs/dsh.md](dsh.md) for why a store symlink would break it there.
+  `herdr` sits on the same copied side, for the same reason: its settings screen rewrites
+  `~/.config/herdr/config.toml`, and `herdr integration install` rewrites the pi extension
+  and opencode plugin payloads, so all three are installed as writable copies
+  (`modules/guest/home/herdr.nix`, `modules/guest/herdr-integrations.nix`).
 
 ### 2. Persistent Shares (Mutable)
 
@@ -187,6 +191,8 @@ Exactly one key, the agentic one. If the personal key appears, the forwarding is
 If no key appears at all, the forwarding block did not match the address you connected to. `ssh -G <address>` settles it: the `forwardagent` line prints the resolved socket path, and the whole check runs without connecting or touching any key file.
 
 > **Do not add `IdentitiesOnly yes`** to `modules/guest/home/ssh.nix` or to a drop-in without also setting `IdentityFile` to the **public** key. With no `IdentityFile`, `IdentitiesOnly` suppresses agent identities outright — the agent is offered nothing, and a working setup looks convincingly broken.
+
+Inside the guest, shells point `SSH_AUTH_SOCK` at `~/.ssh/agent.sock` — a stable symlink that `/etc/ssh/sshrc` aims at the current connection's forwarded socket (`modules/guest/ssh-agent-socket.nix`). That is what lets herdr and tmux panes, and the dsh web UI, outlive the connection that forwarded the agent in. The link can dangle when the connection it pointed at closes; any new ssh session into the guest re-points it. So if a long-lived pane starts failing pushes with `Permission denied (publickey)` while a fresh `ssh permafrost` works, just open that fresh session — nothing needs relinking by hand.
 
 ## GUI and Display
 
