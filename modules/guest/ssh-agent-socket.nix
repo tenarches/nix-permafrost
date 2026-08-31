@@ -22,6 +22,13 @@
   # makes a pane survive a reconnect: the symlink moves under it and the
   # variable never has to change.
   #
+  # The relink only happens when the current target is dead. Unconditional
+  # last-writer-wins is what shipped first, and it dangles avoidably: with
+  # connections A then B open, the link tracks B, and when B closes sshd
+  # removes B's socket — leaving the link dead while A's socket is still
+  # alive. Repointing only a broken link means a new connection never steals
+  # a working one, and every inbound session still heals a dangling one.
+  #
   # Nothing host-side is involved. ~/.ssh is guest-local — every share is
   # declared by the harness that needs it and none of them is .ssh — so this
   # writes only into the ephemeral guest home.
@@ -39,7 +46,11 @@
         # Runs under /bin/sh for every session sshd sets up, so keep it POSIX
         # and keep it quiet — anything printed here lands in front of the
         # session's own output.
-        if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/${stableSocket}" ]; then
+        #
+        # -S follows the symlink, so the relink is skipped while the current
+        # target is a live socket — see the header for why.
+        if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/${stableSocket}" ] \
+          && [ ! -S "$HOME/${stableSocket}" ]; then
           ${pkgs.coreutils}/bin/mkdir -p -m 0700 "$HOME/.ssh"
           ${pkgs.coreutils}/bin/ln -sfn "$SSH_AUTH_SOCK" "$HOME/${stableSocket}"
         fi
