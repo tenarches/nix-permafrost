@@ -215,6 +215,18 @@
           "nix-command"
           "flakes"
         ];
+        # When free space in the store drops below min-free during a build,
+        # the daemon garbage-collects until max-free bytes are free, keeping
+        # the rw overlay from ever hitting 100% again. max-free is bounded
+        # because the default (infinite) would collect every unrooted path on
+        # the first trigger and force mass re-downloads.
+        #
+        # No auto-optimise-store here: microvm.nix asserts it cannot work
+        # with writableStoreOverlay (hard links cannot cross the overlay
+        # boundary). Dedup happens on the host, whose store is the read-only
+        # lower layer.
+        min-free = 5368709120; # 5 GiB
+        max-free = 21474836480; # 20 GiB
         # root only. A nix trusted user is root-equivalent by construction —
         # the daemon runs as root and honours per-invocation `substituters`,
         # `post-build-hook`, `sandbox = false` and friends from anyone on this
