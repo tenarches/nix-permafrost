@@ -32,7 +32,7 @@
           mountPoint = "/nix/.rw-store";
           fsType = "ext4";
           label = "rw-store";
-          size = 51200; # 50 GiB
+          size = 102400; # 100 GiB
           autoCreate = true;
         }
         {
