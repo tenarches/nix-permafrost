@@ -58,6 +58,18 @@
           "nix-command"
           "flakes"
         ];
+        # Deduplicate identical store files via hard links. This store is also
+        # the guest's read-only lower layer; dedup here would have absorbed
+        # nearly all 28GB of the store outage with zero behaviour change for
+        # anything reading the store. (The guest cannot set this itself —
+        # microvm.nix asserts it does not work with writableStoreOverlay.)
+        auto-optimise-store = true;
+        # When free space drops below min-free during a build, the daemon
+        # garbage-collects until max-free bytes are free, so the store stops
+        # short of 100%. max-free is bounded because the default (infinite)
+        # would collect every unrooted path on the first trigger.
+        min-free = 5368709120; # 5 GiB
+        max-free = 21474836480; # 20 GiB
         trusted-users = [
           "root"
           "agent"
