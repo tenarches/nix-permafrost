@@ -65,7 +65,7 @@
           # through virtio-blk on every boot.
           image = img "swap";
           mountPoint = null;
-          size = 8192;
+          size = 16384;
           autoCreate = false;
         }
       ];
