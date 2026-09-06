@@ -19,6 +19,12 @@
       stateDir = "/var/lib/permafrost/${cfg.name}";
       img = name: "${stateDir}/${name}.img";
 
+      # Single source of truth for the store overlay volume: the daemon's GC
+      # thresholds below are percentages of this, so resizing the volume
+      # rescales them.
+      rwStoreSizeMiB = 102400; # 100 GiB
+      rwStoreBytes = rwStoreSizeMiB * 1024 * 1024;
+
       # Every writable path in the guest lives on a sparse, disk-backed volume that is
       # destroyed and recreated on each boot. Nothing writable is RAM-backed except /,
       # which microvm.nix mounts as a tmpfs at 50% of guest memory.
@@ -32,7 +38,7 @@
           mountPoint = "/nix/.rw-store";
           fsType = "ext4";
           label = "rw-store";
-          size = 102400; # 100 GiB
+          size = rwStoreSizeMiB;
           autoCreate = true;
         }
         {
@@ -225,8 +231,8 @@
         # with writableStoreOverlay (hard links cannot cross the overlay
         # boundary). Dedup happens on the host, whose store is the read-only
         # lower layer.
-        min-free = 5368709120; # 5 GiB
-        max-free = 21474836480; # 20 GiB
+        min-free = rwStoreBytes * 5 / 100; # 5% — 5 GiB at the current size
+        max-free = rwStoreBytes * 20 / 100; # 20% — 20 GiB at the current size
         # root only. A nix trusted user is root-equivalent by construction —
         # the daemon runs as root and honours per-invocation `substituters`,
         # `post-build-hook`, `sandbox = false` and friends from anyone on this
