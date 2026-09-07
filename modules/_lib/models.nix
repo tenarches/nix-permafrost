@@ -35,6 +35,24 @@ let
   };
   dshThinkingBudgets = lib.filterAttrs (name: _: name != "xhigh") thinkingBudgets;
 
+  # Sampling, as the model card specifies it for thinking mode. Every model the
+  # endpoint serves is a Qwen3 reasoning model, so this is one attrset rather
+  # than a per-model field, for the same reason `reasoning` below is not one.
+  #
+  # These are not decoration: vLLM declares and validates all six (an
+  # out-of-range value is a 400 naming the parameter), and without them the
+  # request inherits whatever default the endpoint was launched with.
+  #
+  # If a non-Qwen model ever joins the list, move this to a per-entry field.
+  samplingParams = {
+    temperature = 1.0;
+    top_p = 0.95;
+    top_k = 20;
+    min_p = 0.0;
+    presence_penalty = 0.0;
+    repetition_penalty = 1.0;
+  };
+
   # Every model the endpoint serves. `id` is the wire name vLLM was started
   # with; adding one here reaches both harnesses.
   #
@@ -60,6 +78,7 @@ let
   piModel = model: {
     inherit (model) id name contextWindow;
     reasoning = true;
+    inherit samplingParams;
     cost = {
       input = 0;
       output = 0;
@@ -76,6 +95,7 @@ in
     defaultModel
     thinkingBudgets
     dshThinkingBudgets
+    samplingParams
     models
     ;
 
