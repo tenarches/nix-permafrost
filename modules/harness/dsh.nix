@@ -164,8 +164,13 @@
             maxTokensField = "max_tokens";
           };
 
+          # Per model rather than the route's `defaultMaxTokens`: the adapter treats
+          # that one as a description of the model's capability and never lets it
+          # become a per-request cap, while a model's own `maxTokens` does become
+          # the request default. Only the latter stops a reasoning run.
           models = map (model: {
             inherit (model) id name contextWindow;
+            inherit (models) maxTokens;
             input = [
               "text"
               "image"

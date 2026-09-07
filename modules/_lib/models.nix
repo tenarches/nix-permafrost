@@ -35,6 +35,28 @@ let
   };
   dshThinkingBudgets = lib.filterAttrs (name: _: name != "xhigh") thinkingBudgets;
 
+  # The cap on one response — thinking AND answer together, not the answer
+  # alone. It is the only thing bounding reasoning here, because the budgets
+  # above never reach the wire: both harnesses send them only when the profile
+  # names a `thinkingTokenBudgetField`, and this endpoint refuses that field
+  # outright ("thinking_token_budget is not yet supported by the V2 model
+  # runner"). So the models get `reasoning_effort` and think until this stops
+  # them.
+  #
+  # Left unset, pi caps at 16384 and dsh at 32768, and neither survives a level
+  # above `low`: measured at `high`, thinking alone consumed all 16384 tokens
+  # and the answer never started (finish_reason "length", zero content), which
+  # is the "Response was truncated before completion." the harness reports.
+  #
+  # So this has to be one number that serves the highest level in use, and it
+  # tracks the `xhigh` row above: 131072, half the 256k window, which is what
+  # that level is for. Lower levels do not reserve it — measured at `medium`,
+  # a derivation that truncated at 16384 finished at 28468 tokens and stopped
+  # on its own. The cap only ever ends a run that would otherwise be cut off
+  # mid-thought, and both harnesses clamp it to the context left in a session,
+  # so a long history shrinks it rather than overflowing the window.
+  maxTokens = 131072;
+
   # Sampling, as the model card specifies it for thinking mode. Every model the
   # endpoint serves is a Qwen3 reasoning model, so this is one attrset rather
   # than a per-model field, for the same reason `reasoning` below is not one.
@@ -78,7 +100,7 @@ let
   piModel = model: {
     inherit (model) id name contextWindow;
     reasoning = true;
-    inherit samplingParams;
+    inherit maxTokens samplingParams;
     cost = {
       input = 0;
       output = 0;
@@ -95,6 +117,7 @@ in
     defaultModel
     thinkingBudgets
     dshThinkingBudgets
+    maxTokens
     samplingParams
     models
     ;
