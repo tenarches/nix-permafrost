@@ -17,7 +17,7 @@ let
   # xhigh, which burns most of a 128k context on thinking before the model
   # reaches the task; medium is the level these models are actually useful at.
   defaultThinkingLevel = "medium";
-  defaultModel = "qwen3.8-27b";
+  defaultModel = "Qwen3.8-MXFP4";
 
   # Token budget per thinking level.
   #
@@ -27,11 +27,11 @@ let
   # `dshThinkingBudgets` drops it. xhigh remains a selectable *level* in dsh
   # (ModelThinkingLevel carries it); it just has no configurable budget.
   thinkingBudgets = {
-    minimal = 1024;
-    low = 4096;
-    medium = 10240;
-    high = 32768;
-    xhigh = 65536;
+    minimal = 2048;
+    low = 8192;
+    medium = 24576;
+    high = 65536;
+    xhigh = 131072;
   };
   dshThinkingBudgets = lib.filterAttrs (name: _: name != "xhigh") thinkingBudgets;
 
@@ -43,14 +43,9 @@ let
   # so a model can be reordered here without changing what runs.
   models = [
     {
-      id = "qwen3.6-27b";
-      name = "Qwen 3.6 27B (128k)";
-      contextWindow = 131072;
-    }
-    {
-      id = "qwen3.8-27b";
-      name = "Qwen 3.8 27B (128k)";
-      contextWindow = 131072;
+      id = "Qwen3.8-MXFP4";
+      name = "Qwen 3.8 27B (256k)";
+      contextWindow = 262144;
     }
     {
       id = "qwen3.6-35b-a3b";
