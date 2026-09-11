@@ -4,7 +4,9 @@ A guide for someone who has not used this repository before. It assumes you know
 Linux and git, and nothing about permafrost, microvms, or dsh.
 
 Everything below was checked against dsh `0.1.1-rc.2` and the built guest. Where a
-claim could not be checked, it says so.
+claim could not be checked, it says so. The package has since moved to
+`0.1.5-rc.2`; the plugin and model-adapter names used here were re-checked
+against that release, the remaining config keys were not.
 
 ---
 
@@ -459,6 +461,7 @@ installed, and network access. Not tried here.
 | `modules/guest/shares.nix` | How a `permafrost.shares` entry becomes a mount and a symlink |
 | `modules/_lib/models.nix` | The shared model catalogue — endpoint, models, thinking budgets |
 | `modules/guest/identity.nix` | The guest's address, `permafrost.identity.ip = 192.168.33.10` |
+| `modules/_pkgs/dsh.nix` | The dsh package itself — version pin, source hash, update procedure |
 | `flake.nix` | The `agent-skills` and `llm-agents` inputs |
 | `modules/_pkgs/runner.nix` | `nix run .#permafrost` |
 
@@ -521,10 +524,10 @@ reclaims disk from a guest directory that is gone.
 
 ## 13. Upstream is a preview
 
-dsh is version `0.1.1-rc.2` and its README says plainly: *"THERE WILL BE
+dsh is version `0.1.5-rc.2` and its README says plainly: *"THERE WILL BE
 COMPATIBILITY-BREAKING CHANGES."*
 
-The version is pinned by hash, so this guest is reproducible and will keep working. But a
-future `nix flake update` can invalidate any config key described here. If dsh stops
-loading its config after an update, that is the first thing to suspect —
+The version is pinned by hash in `modules/_pkgs/dsh.nix`, so this guest is reproducible
+and will keep working. But any bump to that pin can invalidate any config key described
+here. If dsh stops loading its config after a bump, that is the first thing to suspect —
 `--dump-config` names the row it choked on.

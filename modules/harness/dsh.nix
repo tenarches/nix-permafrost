@@ -51,7 +51,10 @@
       # unit's own ReadWritePaths already cover it.
       tlsDir = "/var/lib/caddy/tls";
 
-      dshPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.dsh;
+      # Vendored rather than taken from the llm-agents input, which is still on
+      # 0.1.1-rc.2 — see modules/_pkgs/dsh.nix for the version pin and the
+      # update procedure.
+      dshPkg = pkgs.callPackage ../_pkgs/dsh.nix { };
 
       # dsh's environment. Named rather than written straight into
       # environment.variables because a systemd user unit does not inherit that
