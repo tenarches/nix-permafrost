@@ -146,12 +146,16 @@
 
           # THE default reasoning effort: dispatch resolves each request as
           # `options.reasoningEffort ?? profile.reasoning`. The models themselves
-          # default to xhigh, which spends most of a 128k context thinking before
+          # default to xhigh, which spends most of the context thinking before
           # reaching the task.
           reasoning = models.defaultThinkingLevel;
           thinkingBudgets = models.dshThinkingBudgets;
 
-          defaultContextWindow = 131072;
+          # A fallback only: every model in the list carries its own
+          # contextWindow and that is what dispatch uses. It matters for a model
+          # added without one, so it tracks the larger of the two windows
+          # rather than lagging at the 128k it used to name.
+          defaultContextWindow = 262144;
           defaultInput = [
             "text"
             "image"
