@@ -11,13 +11,13 @@
 let
   # vLLM's OpenAI-compatible surface. Not the bare host: pi's `baseUrl` and
   # dsh's `baseURL` are both the API root, /v1 included.
-  baseUrl = "http://petunia.home.lan:8000/v1";
+  baseUrl = "http://petunia.home.lan:8080/v1";
 
   # Reasoning is on by default at `medium`. The endpoint's own default is
   # xhigh, which burns most of a 128k context on thinking before the model
   # reaches the task; medium is the level these models are actually useful at.
   defaultThinkingLevel = "medium";
-  defaultModel = "Qwen3.8-MXFP4";
+  defaultModel = "vllm/Qwen3.8-MXFP4";
 
   # Token budget per thinking level.
   #
