@@ -21,7 +21,7 @@ What is set up for you:
 |---|---|
 | Model | `qwen3.8-27b`, 128k context, text + images |
 | Reasoning | **medium** by default (the models' own default is `xhigh`) |
-| MCP servers | context7, time, nixos, terraform — running, no setup |
+| MCP servers | one row, pointed at the LAN gateway — no setup |
 | Skills | seven curated skills, pre-installed and editable |
 | Browser | `playwright` on `PATH`, chromium/firefox/webkit already built |
 | Sandbox | **off** — see [§8](#8-the-permission-posture) before you get comfortable |
@@ -138,11 +138,6 @@ the two can hold port 3080, so the second one you start exits with an address-in
 > `systemctl --user enable dsh-web` is not the missing step — it prints an explanation and
 > does nothing. The unit has no `[Install]` section on purpose, because enabling *is*
 > linking into a target, which is exactly the autostart being avoided. Start it per boot.
-
-Two footnotes on the foreground form. `Ctrl-C` reaches dsh's MCP child processes as well as
-dsh, and one of them — `mcp-server-time` — has no `KeyboardInterrupt` guard, so it prints a
-long Python traceback on the way out. It is noise, not a failure. The service does not do
-this: `systemctl stop` sends `SIGTERM`, which Python takes without an exception.
 
 #### Reaching it
 
@@ -389,56 +384,50 @@ not real confinement.
 
 ---
 
-## 9. Adding an MCP server
+## 9. The MCP gateway
 
-MCP servers are plugin rows in the composition layer. **None are enabled by default**
-upstream — each one is executable code running outside the agent's sandbox, so mounting
-one is meant to be deliberate. Four are wired up here.
-
-To add one for a session, edit `~/.dsh/cordis.patch.yml` and add to the `insert` list:
+MCP servers are plugin rows in the composition layer, and **none are enabled by default**
+upstream — each one is tool code the model can reach outside the agent's sandbox, so
+mounting one is meant to be deliberate. Exactly one row is wired up here, and it points at
+the LAN gateway rather than at anything running in the guest:
 
 ```yaml
-- id: mcp-example
+- id: mcp-gateway
   name: '@deepseek-ai/dsh-mcp-client'
   config:
-    serverName: example          # [A-Za-z0-9_-]{1,32}, must be unique
-    transport: stdio             # or: streamable-http, with `url` instead
-    command: /path/to/server
-    args: ['stdio']              # only if the server needs a subcommand
+    serverName: gateway          # [A-Za-z0-9_-]{1,32}, must be unique
+    transport: streamable-http
+    url: http://petunia.home.lan:8080/mcp
 ```
 
-Restart the profile. Its tools appear as `mcp__example__<toolname>`.
+Its tools appear as `mcp__gateway__<toolname>` — one namespace for everything the gateway
+fronts. The address comes from `permafrost.mcp.gatewayUrl`, declared in
+`modules/harness/mcp.nix`; change it there and rebuild, or edit
+`~/.dsh/cordis.patch.yml` and restart the profile to try one for a session.
 
-To make it permanent, add it to the `mcpServers` list in `modules/harness/dsh.nix` — that renders
-the same row with a store path for `command`, so it does not depend on `PATH`.
+**Adding a second server.** Prefer putting it behind the gateway. If you do need one
+mounted directly, add another row to the `insert` list. A local binary is `transport:
+stdio` with a `command` and optional `args`; give it a store path rather than a bare name,
+since `PATH` inside a plugin's spawn environment is not guaranteed.
 
-**A note on stderr.** An MCP server is a child process and inherits the terminal's stderr,
-so anything it logs there lands in your session, interleaved with dsh's own output. That
-is where the terraform server's `failed to create TFE client` complaint came from: it
-reaches for an HCP Terraform client whether or not one is configured, no token reaches
-this guest, and the nine registry tools work regardless. It is silenced with
-`--log-level fatal` rather than fixed, because there was nothing broken to fix. Expect the
-same from any server you add that is chatty on stderr — and if a server hangs at startup
-instead, check stderr first, since that is where it will say why.
+**A note on stderr, if you mount a stdio server.** It is a child process and inherits the
+terminal's stderr, so anything it logs lands in your session, interleaved with dsh's own
+output. Expect that from any server that is chatty there — and if one hangs at startup
+instead, check stderr first, since that is where it will say why. The gateway has neither
+problem: it is a network call, not a spawned child.
 
-**GitHub.** `github-mcp-server` is installed but deliberately not mounted: it exits at
-startup unless `GITHUB_PERSONAL_ACCESS_TOKEN` is set, and no token reaches this guest. To
-use it, provide a token and add:
+**Authentication.** The gateway needs none today. If one that does replaces it, the
+credential goes in a `headers` entry rather than in the URL:
 
 ```yaml
-- id: mcp-github
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: github
-    transport: stdio
-    command: github-mcp-server
-    args: ['stdio']
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: !!js process.env.GITHUB_TOKEN
+    headers:
+      Authorization: !!js '`Bearer ${process.env.MCP_TOKEN}`'
 ```
 
 `!!js` marks a value evaluated when the config loads — that is how you forward an
 environment variable, since a server's environment is otherwise scrubbed of credentials.
+Note that the Nix-generated patch file cannot express a `!!js` tag, so a row needing one
+has to be written by hand.
 
 Only **tools** are bridged. MCP Resources and Prompts are not wired to anything.
 
@@ -516,10 +505,6 @@ come up.
 **`Address already in use` on port 3080.** The service and the foreground `dsh-web` command
 are the same server and cannot both hold the port. `systemctl --user status dsh-web` says
 whether the service already has it.
-
-**A Python traceback when you `Ctrl-C` the foreground `dsh-web`.** Expected, and harmless:
-`Ctrl-C` reaches dsh's MCP children too, and `mcp-server-time` does not guard
-`KeyboardInterrupt`. `systemctl --user stop dsh-web` exits silently instead.
 
 **`Permission denied (publickey)` on `git push` from the web UI or a long-lived pane.** The
 guest has no key of its own; pushes go through `~/.ssh/agent.sock`, a stable symlink to the

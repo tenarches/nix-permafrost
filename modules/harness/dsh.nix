@@ -35,6 +35,9 @@
       # disagree.
       inherit (config.permafrost.identity) ip fqdn;
 
+      # The LAN MCP gateway, declared in harness/mcp.nix.
+      inherit (config.permafrost.mcp) gatewayUrl;
+
       # Every authority the /api Host-header fence has to accept. Port-less
       # entries match on any port, so this does not have to track tlsPort.
       trustedHosts = [ ip ] ++ lib.optional (fqdn != null) fqdn;
@@ -180,73 +183,32 @@
         };
       };
 
-      # One plugin row per MCP server. There is no `mcpServers` dict in dsh, and no
-      # server is mounted by default — each one is executable code running outside
-      # the agent sandbox, so mounting it is an explicit act.
+      # The one MCP row. dsh mounts no server by default — each one is tool code
+      # the model can reach outside the agent's own sandbox — so this is still an
+      # explicit act, even though it is now an address rather than a package.
       #
-      # Commands are store paths rather than bare names: PATH inside a plugin's
-      # spawn environment is not this module's to guarantee.
+      # streamable-http rather than stdio, which is what every server here used
+      # to be. Two things follow from that. The gateway is not a child process,
+      # so nothing it logs lands in the session's stderr the way a spawned
+      # server's did. And it is reached over the bridge, so a gateway that is
+      # down surfaces as a connection error rather than a binary that fails to
+      # exec.
       #
-      # Invocation forms were each checked against the built binary: context7, time
-      # and nixos speak MCP bare over stdin; terraform needs a `stdio` subcommand.
+      # failOnStartupError is left at its default of false: a gateway that is
+      # unreachable should cost the MCP tools, not the whole harness.
       #
-      # github-mcp-server is installed but deliberately absent here — it exits at
-      # startup unless GITHUB_PERSONAL_ACCESS_TOKEN is set, and no token reaches
-      # this guest. docs/dsh.md has the row to paste once one does.
-      mcpRow = row: {
-        id = "mcp-${row.name}";
+      # Tools arrive namespaced by serverName, so they are `mcp__gateway__<tool>`
+      # — one namespace for everything the gateway fronts, rather than one per
+      # server as when each ran here.
+      gatewayRow = {
+        id = "mcp-gateway";
         name = "@deepseek-ai/dsh-mcp-client";
         config = {
-          serverName = row.name;
-          transport = "stdio";
-          command = lib.getExe row.package;
-        }
-        // lib.optionalAttrs (row ? args) { inherit (row) args; };
+          serverName = "gateway";
+          transport = "streamable-http";
+          url = gatewayUrl;
+        };
       };
-
-      mcpServers = [
-        {
-          name = "context7";
-          package = pkgs.context7-mcp;
-        }
-        {
-          name = "time";
-          package = pkgs.mcp-server-time;
-        }
-        {
-          name = "nixos";
-          package = pkgs.mcp-nixos;
-        }
-        # --log-level fatal is about the terminal, not the server. Logrus writes to
-        # stderr, which a stdio MCP child inherits from whatever launched dsh, so
-        # every session opened with the web helpers printed four lines ending in
-        #
-        #   NewSessionHandler failed to create TFE client
-        #     error="open ~/.terraform.d/credentials.tfrc.json: no such file"
-        #   Session has no valid TFE client - TFE tools will not be available
-        #
-        # which reads as a failed start and is not one. The session handler tries
-        # for an HCP Terraform client unconditionally — --toolsets changes nothing,
-        # confirmed by diffing tools/list between `all` and `registry`: nine
-        # registry tools either way, no TFE tool ever registered without a token.
-        # No token reaches this guest, so the client it is failing to build is one
-        # nothing here would use.
-        #
-        # fatal rather than error, because the second line is a warning and the
-        # first is logged at error. Nothing is lost that would still be
-        # recoverable: a log level cannot silence a fatal, and JSON-RPC is on
-        # stdout, untouched. One line survives — "Terraform MCP Server running on
-        # stdio", printed to stderr directly rather than through logrus.
-        {
-          name = "terraform";
-          package = pkgs.terraform-mcp-server;
-          args = [
-            "stdio"
-            "--log-level"
-            "fatal"
-          ];
-        }
-      ];
 
       # The composition layer: a list of patch rows, each either an override keyed
       # by `id` or an `insert` of new rows.
@@ -267,7 +229,7 @@
             model = models.defaultModel;
           };
         }
-        { insert = map mcpRow mcpServers; }
+        { insert = [ gatewayRow ]; }
       ];
 
       # dsh has no TUI; `dsh web` serves a browser SPA. It stays on loopback and

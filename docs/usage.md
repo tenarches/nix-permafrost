@@ -130,16 +130,26 @@ you write.
 
 ## External Tools (MCP)
 
-`modules/harness/mcp.nix` puts context7, time, github, terraform, and nixos MCP servers on
-`PATH` for any harness that knows how to speak the protocol. `pi`, alongside `mcporter`, is
-the harness set up to actually reach them:
+No MCP server runs in the guest. They live behind a gateway on the private LAN, which
+fronts all of them on one streamable-http endpoint. `modules/harness/mcp.nix` declares its
+address and nothing else:
+
+```nix
+permafrost.mcp.gatewayUrl = "http://petunia.home.lan:8080/mcp";  # the default
+```
+
+`dsh` is the harness wired to it, as a single plugin row in its own composition layer —
+it has no `mcpServers` concept of its own; see
+[docs/dsh.md](dsh.md#9-the-mcp-gateway). Everything the gateway fronts reaches the
+model under one namespace, as `mcp__gateway__<toolname>`.
+
+`pi` ships `mcporter` and shares `~/.mcporter` from the host, so pointing it at the gateway
+is an edit to `~/.mcporter/mcporter.json` on the host rather than a change here:
 - **Discover tools:** `npx mcporter list`
 - **Call a tool:** `npx mcporter call <server>.<tool> key:value`
-- **Config:** Managed declaratively in `~/.mcporter/mcporter.json`.
 
-`dsh` reaches the same servers a different way — as plugin rows in its own composition
-layer rather than through `mcporter` — since it has no `mcpServers` concept of its own; see
-[docs/dsh.md](dsh.md#9-adding-an-mcp-server).
+The gateway currently needs no authentication. If that changes, the credential belongs in a
+`headers` entry on the harness's own row, not in the URL.
 
 ## SSH Access
 
