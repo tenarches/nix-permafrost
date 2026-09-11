@@ -479,26 +479,6 @@
         "type": "github"
       }
     },
-    "mcp-servers-nix": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1788705871,
-        "narHash": "sha256-rbcTTqnrnvDRoVKJwG8rnSIpE1mImuOTp8ZncH9YtnI=",
-        "owner": "natsukium",
-        "repo": "mcp-servers-nix",
-        "rev": "00cfd7e097a01ec9fe926dda007207e1dee06bd2",
-        "type": "github"
-      },
-      "original": {
-        "owner": "natsukium",
-        "repo": "mcp-servers-nix",
-        "type": "github"
-      }
-    },
     "microvm": {
       "inputs": {
         "nixpkgs": [
@@ -775,7 +755,6 @@
         "home-manager": "home-manager",
         "import-tree": "import-tree",
         "llm-agents": "llm-agents",
-        "mcp-servers-nix": "mcp-servers-nix",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_3",
         "nixpkgs-crosvm": "nixpkgs-crosvm",

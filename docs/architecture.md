@@ -17,7 +17,6 @@ graph LR
     IT -->|"discovers modules/**/*.nix"| FLAKE
     NIXPKGS -->|follows| MVM["microvm.nix"]
     NIXPKGS -->|follows| LLM["llm-agents.nix"]
-    NIXPKGS -->|follows| MCP["mcp-servers-nix"]
     NIXPKGS -->|follows| HM["home-manager"]
     NIXPKGS -->|follows| NV["nixvim"]
     NIXPKGS -->|follows| SOPS["sops-nix"]
@@ -309,31 +308,22 @@ to enumerate IPs — it would list the VM without its address. The address is st
 
 ## Overlay & Package Pipeline
 
-The Python MCP overlay fixes upstream build issues and feeds into the MCP server package set. The overlay ordering matters — `overlays/python-mcp.nix` must apply before `mcp-servers-nix.overlays.default` so the patched Python packages are visible when MCP server derivations are evaluated. Both are applied once, in `modules/flake/nixpkgs.nix`, to the one `pkgs` instance every `perSystem` and the guest itself share.
+`modules/flake/nixpkgs.nix` applies **no overlays**. The two it used to carry —
+`overlays/python-mcp.nix`, which patched `fastmcp`, `fakeredis`, `pydocket` and `mcp-nixos`
+into building, and `mcp-servers-nix.overlays.default`, which supplied the server
+derivations — existed only so MCP servers could run inside the guest. No MCP server runs
+there any more; `modules/harness/mcp.nix` declares the address of a LAN gateway instead.
+Both overlays and the `mcp-servers-nix` input came out with them.
 
-```mermaid
-graph LR
-    subgraph OVERLAYS["Overlay Stack (order matters)"]
-        PY_MCP["1. overlays/python-mcp.nix<br/>Fix: fastmcp, fakeredis,<br/>pydocket, mcp-nixos"]
-        MCP_OV["2. mcp-servers-nix<br/>.overlays.default"]
-    end
+What the file still does is give every `perSystem` and the guest one shared `pkgs`
+instance, configured once with `allowUnfree`, rather than paying for a second nixpkgs
+evaluation on every `nix build`.
 
-    NIXPKGS["nixpkgs<br/>(unstable)"] --> PY_MCP
-    PY_MCP -->|"patched pkgs"| MCP_OV
-
-    MCP_OV --> PKGS["Available MCP Packages"]
-
-    PKGS --> HARNESS["modules/harness/mcp.nix<br/>+ harness/dsh.nix's plugin rows"]
-
-    style OVERLAYS fill:#7209b722,stroke:#7209b7
-    style NIXPKGS fill:#4361ee,stroke:#3a0ca3,color:#fff
-    style HARNESS fill:#f77f00,stroke:#d62828,color:#fff
-```
-
-A third overlay pair, `overlays/cloud-hypervisor-graphics.nix`, is applied conditionally —
-only when `permafrost.gui = true` — from `modules/guest/launch-runner.nix`, since it pins
-`cloud-hypervisor` itself to a source build and would otherwise force every launch to build
-it from scratch instead of taking nixpkgs's cached binary.
+One overlay remains in the repo, `overlays/cloud-hypervisor-graphics.nix`, and it is not
+applied here. It is applied conditionally — only when `permafrost.gui = true` — from
+`modules/guest/launch-runner.nix`, since it pins `cloud-hypervisor` itself to a source build
+and would otherwise force every launch to build it from scratch instead of taking nixpkgs's
+cached binary.
 
 ---
 

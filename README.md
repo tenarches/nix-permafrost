@@ -6,9 +6,10 @@ boundary, so an agent that may execute arbitrary code or shell commands stays co
 disposable virtual machine.
 
 The whole fleet is one guest, `permafrost`, carrying every harness at once: Claude Code,
-openclaude, opencode, pi (plus mcporter), crush, dsh, antigravity-cli, five MCP
-servers, and Playwright. There is one runner, one address, one ssh alias — see
-[Harness Modules](#harness-modules) for why adding a new agent means adding one file.
+openclaude, opencode, pi (plus mcporter), crush, dsh, antigravity-cli, a row
+pointed at the LAN MCP gateway, and Playwright. There is one runner, one address,
+one ssh alias — see [Harness Modules](#harness-modules) for why adding a new agent
+means adding one file.
 
 ---
 

@@ -15,9 +15,9 @@ via `permafrost.shares`.
 | **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. Shares `~/.config/opencode`. |
 | **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini and the self-hosted models; ships with `mcporter`. Shares `~/.pi` and `~/.mcporter`. |
 | **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. Shares `~/.config/crush` and `~/.local/share/crush`. |
-| **`dsh`** | Self-Hosted Inference | `dsh` (DeepSeek Harness) | Local vLLM only; MCP servers, curated skills, browser UI. No TUI, no shares — see [docs/dsh.md](dsh.md). |
+| **`dsh`** | Self-Hosted Inference | `dsh` (DeepSeek Harness) | Local vLLM only; the MCP gateway, curated skills, browser UI. No TUI, no shares — see [docs/dsh.md](dsh.md). |
 | **`antigravity`** | Web Browsing / GUI | `antigravity-cli` | No shares of its own — nothing it produces is worth carrying across a boot. |
-| **`mcp`** | Shared MCP servers | context7, time, github, terraform, nixos | Available to any harness that speaks the protocol; a harness still has to be told about a server (see `dsh`'s plugin rows). |
+| **`mcp`** | The LAN MCP gateway | *(no packages)* | Declares `permafrost.mcp.gatewayUrl` and nothing else. No MCP server runs in the guest; `dsh` mounts the gateway as one plugin row. |
 | **`browser`** | Browser automation | `playwright-test` | Chromium/Firefox/WebKit prebuilt via Nix, `PLAYWRIGHT_BROWSERS_PATH` pointed at them. |
 
 Adding an agent is adding one more file in this shape — see the README's

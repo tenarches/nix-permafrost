@@ -51,12 +51,6 @@
       flake = false;
     };
 
-    # MCP Server Framework
-    mcp-servers-nix = {
-      url = "github:natsukium/mcp-servers-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     # Devenv 2.2 — native shell activation via `devenv hook`
     devenv = {
       url = "github:cachix/devenv/v2.2.1";

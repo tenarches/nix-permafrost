@@ -350,10 +350,11 @@
           jq
           # An interpreter the agents reach for often enough that its absence
           # is a recurring interruption — a one-off script, a bit of parsing,
-          # a quick calculation. Nearly free: harness/mcp.nix already drags the
-          # same derivation in for the two python MCP servers, so this adds the
-          # profile entries and not the interpreter. Measured at 61 KiB on the
-          # toplevel closure.
+          # a quick calculation. Nearly free, though no longer for the reason
+          # it once was: the two python MCP servers that used to drag the same
+          # derivation in are gone, and git pulls it in instead — so this still
+          # adds the profile entries and not the interpreter. Re-measured at
+          # 62 KiB on the toplevel closure with the MCP servers removed.
           python3
           # GUI Support libraries (Mesa/GL)
           mesa
