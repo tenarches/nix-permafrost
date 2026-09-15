@@ -47,7 +47,7 @@
     # behind code-ssh.novuscotia.com. Drop the input and the skills copy in
     # modules/harness/dsh.nix in a fork.
     agent-skills = {
-      url = "git+ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git?ref=main";
+      url = "git+ssh://git@github.com:mister2d/agent-skills.git?ref=main";
       flake = false;
     };
 
