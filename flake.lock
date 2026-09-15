@@ -3,18 +3,18 @@
     "agent-skills": {
       "flake": false,
       "locked": {
-        "lastModified": 1786989878,
-        "narHash": "sha256-SLl1WWu6zerq6JgDZOOLMNIirJ9U8l499wpxRVlLbAQ=",
-        "ref": "main",
-        "rev": "edf5aa6896829f5743f2f11be657fe444b3968ba",
-        "revCount": 4,
-        "type": "git",
-        "url": "ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git"
+        "lastModified": 1788819764,
+        "narHash": "sha256-Rll7UcyTmgDjeSH7HjZEQmb/3awbmkX4F+siYAPduxw=",
+        "owner": "mister2d",
+        "repo": "agent-skills",
+        "rev": "30d57605c69b47be296a151a2af38e8ca6fea0f0",
+        "type": "github"
       },
       "original": {
+        "owner": "mister2d",
         "ref": "main",
-        "type": "git",
-        "url": "ssh://gitea@code-ssh.novuscotia.com/ddukes/agent-skills.git"
+        "repo": "agent-skills",
+        "type": "github"
       }
     },
     "base16": {
@@ -466,11 +466,11 @@
         "treefmt-nix": "treefmt-nix_2"
       },
       "locked": {
-        "lastModified": 1789098570,
-        "narHash": "sha256-0i3Gd0hjiXLeQGPrpvNx85iynzG/5/Q7523pTdt1kwA=",
+        "lastModified": 1789465295,
+        "narHash": "sha256-SHmg1nHIozErb/73SOBH2gzQcVv3Qn532+DWjaT7EP8=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "3a31e665ca59fc6e553610d96100cc08cbbc759f",
+        "rev": "1583b4c581fd70b1f856fe6de456a97b4b758455",
         "type": "github"
       },
       "original": {
