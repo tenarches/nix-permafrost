@@ -1,6 +1,7 @@
 { pkgs, lib }:
 
-# The self-hosted inference fleet, in one place.
+# The self-hosted inference fleet, in one place — reached through Bifrost, the
+# LAN gateway that fronts vLLM (and serves the MCP endpoint on the same port).
 #
 # Two harnesses need this catalogue in two different shapes: pi reads a
 # models.json of its own design, dsh reads an `llm-pi-ai` provider profile in
@@ -9,15 +10,17 @@
 # drift on a model add. Describe them once here and render per consumer.
 
 let
-  # vLLM's OpenAI-compatible surface. Not the bare host: pi's `baseUrl` and
-  # dsh's `baseURL` are both the API root, /v1 included.
+  # Bifrost's OpenAI-compatible surface, which forwards to vLLM. Not the bare
+  # host: pi's `baseUrl` and dsh's `baseURL` are both the API root, /v1
+  # included. Bifrost passes the vLLM-specific request fields below (`top_k`,
+  # `min_p`, `repetition_penalty`, `reasoning_effort`) through unchanged —
+  # vLLM's own validation errors come back verbatim.
   baseUrl = "http://petunia.home.lan:8080/v1";
 
   # Reasoning is on by default at `medium`. The endpoint's own default is
   # xhigh, which burns most of a 128k context on thinking before the model
   # reaches the task; medium is the level these models are actually useful at.
   defaultThinkingLevel = "medium";
-  defaultModel = "vllm/Qwen3.8-MXFP4";
 
   # Token budget per thinking level.
   #
@@ -75,24 +78,20 @@ let
     repetition_penalty = 1.0;
   };
 
-  # Every model the endpoint serves. `id` is the wire name vLLM was started
-  # with; adding one here reaches both harnesses.
+  # Every vLLM model Bifrost serves. `id` is the wire name: Bifrost namespaces
+  # each backend, so vLLM's `Qwen3.8-MXFP4` is `vllm/Qwen3.8-MXFP4` here.
+  # Adding one reaches both harnesses.
   #
-  # Order is presentation, not preference — it is the order each harness lists
-  # models in its picker. `defaultModel` above is what actually gets selected,
-  # so a model can be reordered here without changing what runs.
+  # The first entry is the default model, so reordering changes what runs.
   models = [
     {
-      id = "Qwen3.8-MXFP4";
+      id = "vllm/Qwen3.8-MXFP4";
       name = "Qwen 3.8 27B (256k)";
       contextWindow = 262144;
     }
-    {
-      id = "qwen3.6-35b-a3b";
-      name = "Qwen 3.6 35B-A3B (128k)";
-      contextWindow = 131072;
-    }
   ];
+
+  defaultModel = (builtins.head models).id;
 
   # Every model here is a reasoning, multi-modal model, so neither is a
   # per-model field above. Cost is zero because the endpoint is ours; pi still
@@ -125,8 +124,8 @@ in
   # ~/.pi/agent/models.json, as consumed by pi.
   piModelsJson = (pkgs.formats.json { }).generate "pi-models.json" {
     inherit defaultThinkingLevel thinkingBudgets;
-    providers.vllm-local = {
-      name = "vllm";
+    providers.bifrost = {
+      name = "bifrost";
       inherit baseUrl;
       apiKey = "not-required";
       api = "openai-completions";
