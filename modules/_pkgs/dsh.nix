@@ -2,9 +2,17 @@
 
 # dsh — the DeepSeek Harness.
 #
-# Vendored rather than taken from the llm-agents input. That input is still on
-# 0.1.1-rc.2 and its open bump targets 0.1.5-rc.1, so the only way to run
-# 0.1.5-rc.2 is to build it here.
+# Vendored rather than taken from the llm-agents input, which trails upstream,
+# so the only way to run this version is to build it here.
+#
+# THIS VERSION IS A CEILING, NOT A CHOICE. Every dsh release from 0.1.6 on
+# (0.1.7-rc.2, 0.2.0-rc.1, ...) requires node-addon-require-builtin ^0.1.6,
+# which pattern-matches machine code in the Node binary and dies at boot on
+# nixpkgs' Node ("Unsupported/no-getter"). 0.1.5-x accepts ^0.1.4, and
+# dsh-lock.json pins the addon at 0.1.5 — a fresh lock would float it to 0.1.6
+# and crash. Regenerate the lock from the existing one (step 3) to keep the
+# pin. `--version` and the build both pass on a crashing release; only booting
+# `dsh web` shows it. See docs/dev-notes/dsh-version-ceiling.md.
 #
 # The published 0.1.5 tarballs carry a devDependency,
 # @deepseek-ai/dsh-experimental-code-runtime-python, that was never published to
@@ -21,6 +29,7 @@
 #    nix hash convert --hash-algo sha256 --to sri <HASH_FROM_ABOVE>
 # 3. Regenerate dsh-lock.json (requires npm):
 #      tar -xf <TGZ_FILE> && cd package
+#      cp <REPO>/modules/_pkgs/dsh-lock.json package-lock.json   # keeps the addon pin
 #      jq 'del(.devDependencies["@deepseek-ai/dsh-experimental-code-runtime-python"])' \
 #        package.json > pj && mv pj package.json   # only while the 404 persists
 #      npm install --package-lock-only --ignore-scripts
@@ -29,11 +38,11 @@
 #    and copy the 'got:' hash from the failure message.
 pkgs.buildNpmPackage rec {
   pname = "dsh";
-  version = "0.1.5-rc.2";
+  version = "0.1.5-rc.3";
 
   src = pkgs.fetchurl {
     url = "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${version}.tgz";
-    hash = "sha256-9MVIOdaegr8cOlpBqRDDzhQFzZ6dl9dTwMBPQGx9dIA=";
+    hash = "sha256-SXfSkjOlkopO8cFuRL3BnXe7848Wgj1U7IfFsBmIML8=";
   };
 
   # The lock file is generated against the patched manifest, so the patch has to
@@ -47,7 +56,7 @@ pkgs.buildNpmPackage rec {
   '';
 
   npmDepsFetcherVersion = 2;
-  npmDepsHash = "sha256-wqT0GTaUvDoMcOU1l2rKU9XYgaFFT8qSN2bkeTZdmMc=";
+  npmDepsHash = "sha256-j/gSO99xyRzI4xl6radjhjVXZvOH4TjdTCDDSDjSVNY=";
 
   # The tarball ships a prebuilt lib/; there is nothing to compile.
   dontNpmBuild = true;
