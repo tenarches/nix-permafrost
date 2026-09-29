@@ -60,7 +60,7 @@
       # environment.variables because a systemd user unit does not inherit that
       # — verified in the guest, where a transient user unit saw all three
       # unset — and the user service below has to be given them explicitly.
-      # VLLM_API_KEY in particular is not optional: the adapter resolves the
+      # BIFROST_API_KEY in particular is not optional: the adapter resolves the
       # variable named by apiKeyEnv and errors at dispatch when it is missing.
       dshEnv = {
         # The microvm is the isolation boundary, so dsh's own sandbox is off and
@@ -74,9 +74,9 @@
         # authoritative opt-out.
         DSH_TELEMETRY_DISABLED = "1";
 
-        # The endpoint wants no key, but the adapter still resolves the variable
-        # named by apiKeyEnv and errors when it is unset.
-        VLLM_API_KEY = "not-required";
+        # Bifrost is unauthenticated on the LAN, but the adapter still resolves
+        # the variable named by apiKeyEnv and errors when it is unset.
+        BIFROST_API_KEY = "not-required";
       };
 
       # Where the launcher's virtiofs share lands. Root-only, so the agent
@@ -111,13 +111,14 @@
         '';
       };
 
-      # vLLM speaks OpenAI, so it belongs to the pi-ai adapter. llm-deepseek is the
-      # native DeepSeek route and cannot be pointed at a gateway this way.
+      # Bifrost (fronting vLLM) speaks OpenAI, so it belongs to the pi-ai adapter.
+      # llm-deepseek is the native DeepSeek route and cannot be pointed at a
+      # gateway this way.
       #
       # The adapter is mounted by the base bundle but dormant: it registers no
       # routes until a `llm-pi-ai:` settings section supplies provider profiles.
       # This section is what wakes it.
-      providerId = "vllm-local";
+      providerId = "bifrost";
 
       # Every level the models offer. `off` maps to null — the level exists and
       # disables thinking, rather than being a wire value to send. The rest pass
@@ -137,7 +138,7 @@
 
       settingsFile = (pkgs.formats.yaml { }).generate "dsh-settings.yaml" {
         llm-pi-ai.providers.${providerId} = {
-          displayName = "vLLM (petunia)";
+          displayName = "Bifrost (petunia)";
           api = "openai-completions";
           baseURL = models.baseUrl;
 
@@ -145,7 +146,7 @@
           # request and errors when the named variable is unset — so the name has
           # to point at something. The value is set in environment.variables
           # below.
-          apiKeyEnv = "VLLM_API_KEY";
+          apiKeyEnv = "BIFROST_API_KEY";
 
           # THE default reasoning effort: dispatch resolves each request as
           # `options.reasoningEffort ?? profile.reasoning`. The models themselves
