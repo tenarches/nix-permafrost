@@ -14,14 +14,15 @@ against that release, the remaining config keys were not.
 
 `dsh` is one of several **harnesses** carried by the one disposable guest this repo boots —
 see the [README](../README.md) if you have not met `permafrost` yet. This harness runs the [DeepSeek
-Harness](https://github.com/deepseek-ai/deepseek-harness), pointed at the **local vLLM
-server at `petunia.home.lan:8000`** — no external API, no key, nothing leaves the network.
+Harness](https://github.com/deepseek-ai/deepseek-harness), pointed at the **Bifrost
+gateway at `petunia.home.lan:8080`**, which fronts the local vLLM server — no external API, no key,
+nothing leaves the network.
 
 What is set up for you:
 
 | | |
 |---|---|
-| Model | `qwen3.8-27b`, 128k context, text + images |
+| Model | `vllm/Qwen3.8-MXFP4`, 256k context, text + images |
 | Reasoning | **medium** by default (the models' own default is `xhigh`) |
 | MCP servers | one row, pointed at the LAN gateway — no setup |
 | Skills | seven curated skills, pre-installed and editable |
@@ -224,24 +225,22 @@ caddy forwards under is accepted; a request arriving with any other `Host` gets
 
 The catalogue lives in **`modules/_lib/models.nix`**, on the host, and is shared with `pi` —
 both harnesses read the one source and render it into two config files inside the same
-`permafrost` guest. Three models are declared:
+`permafrost` guest. One model is declared, under the `vllm/` namespace Bifrost gives its
+vLLM backend:
 
 ```
-qwen3.6-27b
-qwen3.8-27b        <- the default
-qwen3.6-35b-a3b
+vllm/Qwen3.8-MXFP4        <- the default (first entry)
 ```
 
-> Declared is not the same as loaded. At the time of writing, the vLLM server was serving
-> only `qwen3.8-27b`. Check what is actually up with
-> `curl -s http://petunia.home.lan:8000/v1/models | jq -r '.data[].id'`. Selecting a model
-> the server is not serving fails at request time, not at startup.
+> Declared is not the same as served. Check what Bifrost is actually offering with
+> `curl -s http://petunia.home.lan:8080/v1/models | jq -r '.data[].id' | grep '^vllm/'`.
+> Selecting a model the gateway is not serving fails at request time, not at startup.
 
 **Inside the guest**, to switch:
 
 ```bash
 dsh-model                      # list, and show the current default
-dsh-model qwen3.6-35b-a3b      # switch
+dsh-model <model-id>           # switch, e.g. one added to models.nix
 ```
 
 Then restart the profile — the default model lives in the composition layer, which is
