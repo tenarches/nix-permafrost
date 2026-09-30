@@ -56,8 +56,21 @@
 
         tailscale-serve = {
           description = "Serve the dsh web UI on the tailnet";
-          after = [ "tailscaled-autoconnect.service" ];
-          requires = [ "tailscaled-autoconnect.service" ];
+          # Ordered directly after tailscaled as well as its autoconnect unit.
+          # Ordering through autoconnect alone does not hold at shutdown:
+          # that unit has already exited by then, an inactive unit is not in
+          # the shutdown transaction, and with it goes the chain. tailscaled
+          # was stopped first, and the logout below ran against a dead daemon.
+          after = [
+            "tailscaled.service"
+            "tailscaled-autoconnect.service"
+            "network-online.target"
+          ];
+          requires = [
+            "tailscaled.service"
+            "tailscaled-autoconnect.service"
+          ];
+          wants = [ "network-online.target" ];
           wantedBy = [ "multi-user.target" ];
           unitConfig = onlyWithKey;
           path = [
@@ -77,7 +90,7 @@
             # unreachable at shutdown from holding up the guest's power-off; a
             # killed guest simply falls back to the suffix.
             ExecStop = "-${tailscale}/bin/tailscale logout";
-            TimeoutStopSec = 10;
+            TimeoutStopSec = 15;
           };
 
           # The node registers under the OS hostname, which every guest shares,
