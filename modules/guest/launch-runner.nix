@@ -71,20 +71,21 @@
             socket = "${runtimeDir}/ssh.sock";
           }
           {
-            # A TLS certificate for the web UI, issued from Vault by the runner
-            # at launch. Empty when there was no token or Vault said no, which
-            # is how the guest decides to self-sign instead — see
-            # harness/dsh.nix. Runner-only for the same reason as the keys
-            # above: the fleet path has nobody to ask for one.
+            # A single-use tailnet auth key and the node name to join under,
+            # minted by the runner at launch. Empty when there was no OAuth
+            # client or Tailscale said no, which is how the guest decides to
+            # stay off the tailnet — see harness/tailscale.nix. Runner-only
+            # for the same reason as the keys above: the fleet path has nobody
+            # to ask for one.
             #
             # Under /run rather than /mnt: this is per-boot credential
             # material, not persistence, and /mnt/persist means a host share
             # that outlives the guest.
-            tag = "vault_tls";
+            tag = "tailnet";
             proto = "virtiofs";
-            source = "host-managed-virtiofsd-at-vault-tls";
-            mountPoint = "/run/vault-tls";
-            socket = "${runtimeDir}/vault-tls.sock";
+            source = "host-managed-virtiofsd-at-tailnet";
+            mountPoint = "/run/tailnet";
+            socket = "${runtimeDir}/tailnet.sock";
           }
         ]
         ++ map (s: {

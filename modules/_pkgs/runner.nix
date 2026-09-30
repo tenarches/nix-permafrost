@@ -161,96 +161,104 @@ pkgs.writeShellScriptBin identity.name ''
     fi
   fi
 
-  # 3c. JIT TLS certificate for the guest's web UI.
+  # 3c. JIT tailnet auth key for the guest.
   #
-  # Optional and never fatal. The guest config always carries both paths and
-  # decides at boot which one applies: a certificate here means caddy serves
-  # it, an empty directory means caddy self-signs exactly as it did before.
-  # Nothing about that is expressed in Nix — this is a shell script, so the
-  # optionality is shell control flow, the same shape as the agent probe above.
+  # Optional and never fatal. The guest always carries the tailscale unit and
+  # decides at boot whether it applies: a key here means it joins the tailnet
+  # and serves the web UI there, an empty directory means it stays off the
+  # tailnet and the UI is reachable through `ssh -L` as before.
   #
-  # Issued here rather than in the guest on purpose. The guest runs coding
-  # agents with their sandboxes off; handing it a Vault credential would let
-  # anything running in it mint certificates from the intermediate. Issuing on
-  # the host means the guest receives one leaf, for one address, and holds no
-  # Vault access at all — it never even talks to Vault, which is also why the
-  # CA does not have to be added to the guest's trust store.
+  # Minted here rather than in the guest on purpose. The guest runs coding
+  # agents with their sandboxes off; an OAuth client secret in it would let
+  # anything running there mint tagged nodes for as long as the secret is
+  # valid. Minting on the host means the guest receives one key that is
+  # single-use, ephemeral, pre-authorised and expires in minutes — by the time
+  # anything in the guest could read it, it has been spent, and the guest never
+  # talks to the Tailscale API at all.
   #
-  # Overridable without a rebuild, because the role's own constraints
-  # (allowed_domains, require_cn, allow_ip_sans) live with the CA rather than
-  # here, and a mismatch should be a one-line fix rather than a flake edit.
-  VAULT_ADDR="''${VAULT_ADDR:-https://vault.service.consul:8200}"
-  VAULT_PKI_MOUNT="''${VAULT_PKI_MOUNT:-pki_int_homelab}"
-  VAULT_PKI_ROLE="''${VAULT_PKI_ROLE:-permafrost-guest}"
-  VAULT_TLS_CN="''${VAULT_TLS_CN:-${if identity.fqdn != null then identity.fqdn else identity.name}}"
-  # Long enough not to expire under a coding session that runs for days. Well
-  # inside the 768h a mount defaults to, so no mount tune is needed — but the
-  # role's own max_ttl still caps it, and Vault caps rather than refuses, so
-  # what actually gets granted is reported below rather than assumed here.
-  VAULT_TLS_TTL="''${VAULT_TLS_TTL:-336h}"
+  # The OAuth client is read with secretspec as the *launching user*, not root:
+  # the runner is under sudo, and the user's keyring or password manager is
+  # theirs. Overridable without a rebuild, because the tag and tailnet are
+  # policy that lives in the admin console rather than here.
+  TS_TAG="''${TS_TAG:-tag:permafrost-guest}"
+  TS_TAILNET="''${TS_TAILNET:--}"
+  TS_KEY_TTL="''${TS_KEY_TTL:-300}"
+  TAILNET_DIR="$SOCKET_DIR/tailnet"
 
-  VAULT_TLS_DIR="$SOCKET_DIR/vault-tls"
-
-  # sudo strips VAULT_TOKEN just as it strips SSH_AUTH_SOCK. Fall back to the
-  # file the vault CLI itself reads, in the launching user's home.
-  resolve_vault_token() {
-    if [ -n "''${VAULT_TOKEN:-}" ]; then
-      return 0
+  read_ts_secret() {
+    if [ -z "$SUDO_USER" ]; then
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} "$1" 2>/dev/null
+      return
     fi
-    if [ -r "$REAL_HOME/.vault-token" ]; then
-      VAULT_TOKEN=$(${pkgs.coreutils}/bin/cat "$REAL_HOME/.vault-token" 2>/dev/null || true)
-    fi
+    TS_UID=$(id -u "$SUDO_USER")
+    ${pkgs.sudo}/bin/sudo -u "$SUDO_USER" -H \
+      env XDG_RUNTIME_DIR="/run/user/$TS_UID" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TS_UID/bus" \
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} "$1" 2>/dev/null
   }
 
-  issue_vault_tls() {
-    resolve_vault_token
+  issue_tailnet_key() {
+    TS_CLIENT_ID=$(read_ts_secret TS_OAUTH_CLIENT_ID) || TS_CLIENT_ID=""
+    TS_CLIENT_SECRET=$(read_ts_secret TS_OAUTH_CLIENT_SECRET) || TS_CLIENT_SECRET=""
 
-    if [ -z "''${VAULT_TOKEN:-}" ]; then
-      echo "No Vault token found; the guest will self-sign its web UI certificate." >&2
-      echo "  Run 'vault login' for a browser-trusted one." >&2
+    if [ -z "$TS_CLIENT_ID" ] || [ -z "$TS_CLIENT_SECRET" ]; then
+      echo "No Tailscale OAuth client found; the guest will stay off the tailnet." >&2
+      echo "  Run 'secretspec set TS_OAUTH_CLIENT_ID' and 'secretspec set TS_OAUTH_CLIENT_SECRET'" >&2
+      echo "  (secretspec.toml in this repo declares them) to enable it." >&2
       return 0
     fi
 
-    RESPONSE=$(${pkgs.curl}/bin/curl -sS --max-time 15 \
-      -H "X-Vault-Token: $VAULT_TOKEN" \
-      -X POST \
-      -d "{\"common_name\":\"$VAULT_TLS_CN\",\"ip_sans\":\"${identity.ip}\",\"ttl\":\"$VAULT_TLS_TTL\"}" \
-      "$VAULT_ADDR/v1/$VAULT_PKI_MOUNT/issue/$VAULT_PKI_ROLE" 2>&1) || {
-      echo "Vault unreachable; the guest will self-sign its web UI certificate." >&2
+    # Secrets go to curl on stdin (--config), never argv, so nothing shows in
+    # `ps`.
+    TOKEN_RESPONSE=$(printf '%s\n' \
+      "data-urlencode = \"client_id=$TS_CLIENT_ID\"" \
+      "data-urlencode = \"client_secret=$TS_CLIENT_SECRET\"" \
+      'data-urlencode = "grant_type=client_credentials"' |
+      ${pkgs.curl}/bin/curl -sS --max-time 15 --config - https://api.tailscale.com/api/v2/oauth/token
+    ) || {
+      echo "Tailscale API unreachable; the guest will stay off the tailnet." >&2
       return 0
     }
 
-    if ! echo "$RESPONSE" | ${pkgs.jq}/bin/jq -e '.data.private_key' >/dev/null 2>&1; then
-      echo "Vault refused to issue a certificate; the guest will self-sign." >&2
-      echo "  $(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -rc '.errors // .' 2>/dev/null || echo "$RESPONSE")" >&2
-      echo "  Check: vault read $VAULT_PKI_MOUNT/roles/$VAULT_PKI_ROLE" >&2
+    TS_TOKEN=$(echo "$TOKEN_RESPONSE" | ${pkgs.jq}/bin/jq -r '.access_token // empty')
+    if [ -z "$TS_TOKEN" ]; then
+      echo "Tailscale refused the OAuth client; the guest will stay off the tailnet." >&2
+      echo "  $(echo "$TOKEN_RESPONSE" | ${pkgs.jq}/bin/jq -rc '.message // .error // .' 2>/dev/null)" >&2
       return 0
     fi
 
-    # Leaf first, then the chain, in one file — caddy wants the bundle.
-    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.certificate, (.data.ca_chain // [] | .[])' \
-      > "$VAULT_TLS_DIR/cert.pem"
-    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.private_key' > "$VAULT_TLS_DIR/key.pem"
+    KEY_REQUEST=$(${pkgs.jq}/bin/jq -n --arg tag "$TS_TAG" --argjson ttl "$TS_KEY_TTL" '{
+      capabilities: { devices: { create: {
+        reusable: false, ephemeral: true, preauthorized: true, tags: [$tag]
+      } } },
+      expirySeconds: $ttl
+    }')
+    KEY_RESPONSE=$(printf 'header = "Authorization: Bearer %s"\n' "$TS_TOKEN" |
+      ${pkgs.curl}/bin/curl -sS --max-time 15 --config - \
+        -H "Content-Type: application/json" -d "$KEY_REQUEST" \
+        "https://api.tailscale.com/api/v2/tailnet/$TS_TAILNET/keys"
+    ) || {
+      echo "Tailscale API unreachable; the guest will stay off the tailnet." >&2
+      return 0
+    }
 
-    chmod 0644 "$VAULT_TLS_DIR/cert.pem"
-    chmod 0600 "$VAULT_TLS_DIR/key.pem"
-
-    # Report what Vault granted, not what was asked for. A ttl beyond the
-    # role's max_ttl is capped, not refused: the response is still 200 and the
-    # truncation appears only in .warnings. Echoing the request back would
-    # describe a certificate good for hours as one good for weeks, and the
-    # first anyone would know is the browser complaining mid-session.
-    EXPIRY=$(echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.data.expiration // empty')
-    if [ -n "$EXPIRY" ]; then
-      echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE, valid until $(${pkgs.coreutils}/bin/date -d "@$EXPIRY" '+%Y-%m-%d %H:%M %Z')."
-    else
-      echo "Issued a web UI certificate from $VAULT_PKI_MOUNT/$VAULT_PKI_ROLE."
+    TS_KEY=$(echo "$KEY_RESPONSE" | ${pkgs.jq}/bin/jq -r '.key // empty')
+    if [ -z "$TS_KEY" ]; then
+      echo "Tailscale refused to mint an auth key; the guest will stay off the tailnet." >&2
+      echo "  $(echo "$KEY_RESPONSE" | ${pkgs.jq}/bin/jq -rc '.message // .' 2>/dev/null)" >&2
+      echo "  Check the OAuth client owns $TS_TAG and has the auth_keys scope." >&2
+      return 0
     fi
 
-    # Vault's own words, when it has any — this is where a capped ttl shows up.
-    echo "$RESPONSE" | ${pkgs.jq}/bin/jq -r '.warnings // [] | .[]' | while IFS= read -r WARNING; do
-      [ -n "$WARNING" ] && echo "  Vault: $WARNING" >&2
-    done
+    # One name per launching host, so guests started on different hosts do not
+    # contend for the bare name and each keeps a stable URL. Every guest shares
+    # the same OS hostname by design; this is the only thing that differs.
+    NODE_NAME="${identity.name}-$(${pkgs.coreutils}/bin/tr 'A-Z._' 'a-z--' < /proc/sys/kernel/hostname | ${pkgs.coreutils}/bin/tr -cd 'a-z0-9-')"
+
+    printf '%s' "$TS_KEY" > "$TAILNET_DIR/authkey"
+    printf '%s' "$NODE_NAME" > "$TAILNET_DIR/hostname"
+    chmod 0600 "$TAILNET_DIR/authkey" "$TAILNET_DIR/hostname"
+    echo "Minted a single-use tailnet auth key for $NODE_NAME ($TS_TAG, valid $TS_KEY_TTL s)."
   }
 
   case "$COMMAND" in
@@ -285,12 +293,12 @@ pkgs.writeShellScriptBin identity.name ''
         exit 1
       fi
 
-      # Always created, even when issuance does not happen: the share is
+      # Always created, even when minting does not happen: the share is
       # declared unconditionally in the guest, so the directory behind it has
-      # to exist. Empty is how the guest learns to self-sign instead.
-      mkdir -p "$VAULT_TLS_DIR"
-      chmod 700 "$VAULT_TLS_DIR"
-      issue_vault_tls
+      # to exist. Empty is how the guest learns to stay off the tailnet.
+      mkdir -p "$TAILNET_DIR"
+      chmod 700 "$TAILNET_DIR"
+      issue_tailnet_key
       ;;
     *)
       echo "Usage: $0 {run|start|stop|status}"
@@ -346,7 +354,7 @@ pkgs.writeShellScriptBin identity.name ''
     # Start virtiofsd backends
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
-    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/vault-tls.sock" --shared-dir "'$VAULT_TLS_DIR'" --sandbox namespace &
+    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/tailnet.sock" --shared-dir "'$TAILNET_DIR'" --sandbox namespace &
 
     ${lib.concatMapStringsSep "\n" (s: ''
       ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -357,7 +365,7 @@ pkgs.writeShellScriptBin identity.name ''
     echo "Waiting for virtiofsd backends..."
     while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
-    while [ ! -S "$SOCKET_DIR/vault-tls.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    while [ ! -S "$SOCKET_DIR/tailnet.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     ${lib.concatMapStringsSep "\n" (
       s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
     ) shares}
@@ -404,7 +412,7 @@ pkgs.writeShellScriptBin identity.name ''
     --property="Environment=SOCKET_DIR=$SOCKET_DIR"
     --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
     --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
-    --property="Environment=VAULT_TLS_DIR=$VAULT_TLS_DIR"
+    --property="Environment=TAILNET_DIR=$TAILNET_DIR"
     --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
     --description="Permafrost VM: ${identity.name}"
     # Reclaim the ephemeral disk images whenever the unit stops — clean exit,
