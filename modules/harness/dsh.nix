@@ -359,6 +359,44 @@
         # Rules are applied in path order, so this holds whichever line comes first.
         tmpfiles.rules = [ "d /home/agent/.dsh 0700 agent users - -" ];
 
+        # Seeds dsh's browser-session secret from the launch share. dsh signs
+        # the cookie that keeps a browser logged in with a secret it keeps in
+        # ~/.dsh/.credentials.yaml, and mints a random one when that file is
+        # absent — which on a guest whose home is fresh every boot is always,
+        # so every boot logs every browser out. The runner supplies the same
+        # secret each launch (see the runner) and this writes it in the record
+        # format dsh reads, before dsh-web starts. dsh uses an existing record
+        # as-is and never rewrites it.
+        #
+        # Skipped when the runner delivered nothing, and it re-checks the shape
+        # itself: dsh throws at startup on a malformed record, and a web UI
+        # that will not start is a worse failure than one that logs you out.
+        services.dsh-web-credentials = {
+          description = "Seed the dsh browser-session secret";
+          before = [ "dsh-web.service" ];
+          unitConfig = {
+            RequiresMountsFor = "/run/launch";
+            ConditionPathExists = "/run/launch/session_secret";
+          };
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = ''
+            secret="$(cat /run/launch/session_secret)"
+            if ! printf '%s' "$secret" | grep -qE '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'; then
+              echo "session secret is malformed; leaving dsh to mint its own" >&2
+              exit 0
+            fi
+
+            umask 077
+            tmp="$(mktemp -p /home/agent/.dsh)"
+            printf 'version: 1\nrecords:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: %s\n' "$secret" > "$tmp"
+            chown agent:users "$tmp"
+            mv -f "$tmp" /home/agent/.dsh/.credentials.yaml
+          '';
+        };
+
         services.dsh-web = {
           description = "dsh web UI";
           wantedBy = [ "multi-user.target" ];
@@ -366,7 +404,10 @@
             "tailscale-serve.service"
             "home-manager-agent.service"
           ];
-          wants = [ "home-manager-agent.service" ];
+          wants = [
+            "home-manager-agent.service"
+            "dsh-web-credentials.service"
+          ];
           unitConfig.RequiresMountsFor = map (s: "/mnt/persist/${s.guest}") (
             lib.filter (s: lib.hasPrefix ".dsh/" s.guest) config.permafrost.shares
           );

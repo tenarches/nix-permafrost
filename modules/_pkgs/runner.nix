@@ -261,6 +261,41 @@ pkgs.writeShellScriptBin identity.name ''
     echo "Minted a single-use tailnet auth key for $NODE_NAME ($TS_TAG, valid $TS_KEY_TTL s)."
   }
 
+  # 3d. The dsh browser-session secret.
+  #
+  # dsh signs the cookie that keeps a browser logged in with a secret it keeps
+  # in ~/.dsh/.credentials.yaml, and the guest's home is a fresh volume every
+  # boot, so without help a new secret is minted each launch and every browser
+  # has to redeem a new launch token. Supplying the same secret each time lets
+  # the cookie outlive the guest (dsh's cookie lifetime, 30 days by default).
+  #
+  # Optional and never fatal: with no entry, dsh mints its own as before.
+  # Validated here because dsh rejects a malformed record at startup, and a
+  # web UI that will not start is a worse failure than one that logs you out.
+  # The secret must decode from base64url to exactly 32 bytes; 43 characters
+  # carry 258 bits, so the last one must have its two spare bits clear, which
+  # limits it to the 16 characters below. `basenc --base64url | tr -d =` on 32
+  # random bytes always produces one.
+  deliver_session_secret() {
+    SESSION_SECRET=$(read_secret DSH_SESSION_SECRET "seed the dsh browser-session secret for the guest launch") || SESSION_SECRET=""
+
+    if [ -z "$SESSION_SECRET" ]; then
+      echo "No dsh session secret found; browsers will need a new launch token every boot." >&2
+      echo "  Store one in pass as dsh/session_secret:" >&2
+      echo "  head -c 32 /dev/urandom | basenc --base64url | tr -d '=' | pass insert -m dsh/session_secret" >&2
+      return 0
+    fi
+
+    if ! printf '%s' "$SESSION_SECRET" | ${pkgs.gnugrep}/bin/grep -qE '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'; then
+      echo "dsh/session_secret is not 43 base64url characters encoding 32 bytes; ignoring it." >&2
+      return 0
+    fi
+
+    printf '%s' "$SESSION_SECRET" > "$LAUNCH_DIR/session_secret"
+    chmod 0600 "$LAUNCH_DIR/session_secret"
+    echo "Seeded the dsh browser-session secret; cookies will survive a relaunch."
+  }
+
   case "$COMMAND" in
     status)
       if systemctl is-active --quiet "$UNIT_NAME"; then
@@ -299,6 +334,7 @@ pkgs.writeShellScriptBin identity.name ''
       mkdir -p "$LAUNCH_DIR"
       chmod 700 "$LAUNCH_DIR"
       issue_tailnet_key
+      deliver_session_secret
       ;;
     *)
       echo "Usage: $0 {run|start|stop|status}"

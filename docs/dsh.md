@@ -176,6 +176,27 @@ treatment `https` does.
 > and Agent preset, Models and everything behind them stay empty. That is the whole reason
 > for serving it over https; there is no dsh setting that avoids it.
 
+#### Staying logged in
+
+The first time a browser opens the UI it redeems the `?token=…` URL that `dsh-web` prints at
+start (`journalctl -u dsh-web | grep token`), and gets a signed cookie good for 30 days. The
+token itself is random per start and cannot be set. What the cookie is checked against can:
+dsh keeps a signing secret in `~/.dsh/.credentials.yaml`, and the guest's home is fresh every
+boot, so by default each boot mints a new secret and logs every browser out.
+
+To keep the cookie across launches, put a secret in `pass` as `dsh/session_secret`:
+
+```bash
+head -c 32 /dev/urandom | basenc --base64url | tr -d '=' | pass insert -m dsh/session_secret
+```
+
+The launcher reads it as you and hands it to the guest over the same root-only share as the
+tailnet key; `dsh-web-credentials.service` writes it into `.credentials.yaml` before the
+server starts. It must be exactly 43 base64url characters encoding 32 bytes (the command above
+always produces one); anything else is ignored with a message. With no entry, dsh mints its
+own and you redeem a fresh token each boot. The cookie is bound to the hostname, so it also
+depends on the tailnet name being stable.
+
 #### Joining the tailnet
 
 Nothing needs configuring per launch. `nix run .#permafrost` reads a Tailscale OAuth client
