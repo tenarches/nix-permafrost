@@ -176,10 +176,11 @@ treatment `https` does.
 #### Joining the tailnet
 
 Nothing needs configuring per launch. `nix run .#permafrost` reads a Tailscale OAuth client
-with [secretspec](https://secretspec.dev) (as you, not root; `secretspec.toml` declares
-`TS_OAUTH_CLIENT_ID` and `TS_OAUTH_CLIENT_SECRET`), mints an auth key, says which way it
-went, and carries on either way. A launch never fails because Tailscale was unreachable or
-no client was configured; the guest just stays off the tailnet.
+with [secretspec](https://secretspec.dev) from your `pass` store (as you, not root;
+`secretspec.toml` maps `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_CLIENT_SECRET` to the entries
+`tailscale/sandbox_client_id` and `tailscale/sandbox_client_secret`), mints an auth key, says
+which way it went, and carries on either way. A launch never fails because Tailscale was
+unreachable or no client was configured; the guest just stays off the tailnet.
 
 **The guest never holds the OAuth client.** The launcher exchanges it on the host for a
 single-use, ephemeral, pre-authorised key tagged `tag:permafrost-guest` that expires in five
@@ -192,7 +193,7 @@ time anything running in the guest could read it, it has been spent. Override `T
 1. Enable MagicDNS and HTTPS certificates.
 2. Define `tag:permafrost-guest` and an owner for it.
 3. Create an OAuth client with only the `auth_keys` scope, restricted to that tag, and store
-   it with `secretspec set TS_OAUTH_CLIENT_ID` and `secretspec set TS_OAUTH_CLIENT_SECRET`.
+   it in `pass` as `tailscale/sandbox_client_id` and `tailscale/sandbox_client_secret`.
 4. Grant your users `tag:permafrost-guest:443` and give the tag **no outbound access**. This
    is the real boundary: the default allow-all would let anything running in the guest reach
    every device on the tailnet.

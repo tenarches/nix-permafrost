@@ -203,8 +203,8 @@ pkgs.writeShellScriptBin identity.name ''
 
     if [ -z "$TS_CLIENT_ID" ] || [ -z "$TS_CLIENT_SECRET" ]; then
       echo "No Tailscale OAuth client found; the guest will stay off the tailnet." >&2
-      echo "  Run 'secretspec set TS_OAUTH_CLIENT_ID' and 'secretspec set TS_OAUTH_CLIENT_SECRET'" >&2
-      echo "  (secretspec.toml in this repo declares them) to enable it." >&2
+      echo "  Store them in pass as tailscale/sandbox_client_id and" >&2
+      echo "  tailscale/sandbox_client_secret, and unlock your GPG key first." >&2
       return 0
     fi
 
