@@ -67,6 +67,17 @@
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
+
+            # Leave the tailnet on the way out. An ephemeral node that merely
+            # stops answering is kept by the control plane for a while, and
+            # the name stays taken — so the next launch on this host registers
+            # as -1, -2, and the URL drifts. Logging out deletes it at once.
+            # Stops before tailscaled does, since this unit is ordered after
+            # it. The dash and short timeout keep a control plane that is
+            # unreachable at shutdown from holding up the guest's power-off; a
+            # killed guest simply falls back to the suffix.
+            ExecStop = "-${tailscale}/bin/tailscale logout";
+            TimeoutStopSec = 10;
           };
 
           # The node registers under the OS hostname, which every guest shares,
