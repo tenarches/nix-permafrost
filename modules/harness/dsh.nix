@@ -325,17 +325,32 @@
 
       environment.variables = dshEnv;
 
-      # Deliberately no wantedBy: the unit exists to be started by hand and
-      # nothing pulls it in, so a guest boots without a web UI listening. Note
-      # that `systemctl --user enable` on it would not do what the name
-      # suggests — enabling is linking into a target, which is precisely the
-      # autostart being avoided. `systemctl --user start dsh-web` is the whole
-      # interface, with `journalctl --user -u dsh-web` for its output.
+      # A system unit running as the agent, not a user unit, because the two
+      # differ in what can be ordered against what. The user manager exists
+      # only after a login (the agent has no linger), and a user unit cannot be
+      # ordered after system units at all. This one can, so the web UI starts on
+      # every boot, after the things it depends on and not before them:
       #
-      # The dsh-web command stays on PATH as well, for a one-off run with the
-      # output in front of you. Only one of the two can hold port 3080 at a
-      # time; the loser exits with an address-in-use error, which is clear
-      # enough not to need guarding against.
+      #   tailscale-serve      so `dsh-web` reads a tailnet name that has
+      #                        settled; a name read early is the pre-rename one
+      #                        and the /api Host fence answers 403. Ordering
+      #                        only: with no tailnet key that unit is skipped
+      #                        and this one starts anyway, on loopback.
+      #   home-manager-agent   which copies settings.yaml and cordis.patch.yml
+      #                        into ~/.dsh. dsh reads the patch file once at
+      #                        start, so starting first means a stale profile.
+      #   the .dsh shares      so sessions land on the host, not on a tmpfs
+      #                        that vanishes with the guest.
+      #
+      # It runs as the agent with the same reach the agent has anyway; nothing
+      # here is privileged. The price is that the agent cannot `systemctl
+      # stop` it: controlling a system unit from an unprivileged user needs
+      # polkit, and polkit installs a setuid pkexec, which is a route to root in
+      # a guest that has deliberately none. Restart=always covers the useful
+      # half instead — `pkill -f 'dsh web'` restarts it, which is what picking
+      # up an edited cordis.patch.yml needs. Stopping it for good takes root
+      # (ssh certificate) or a reboot, and the `dsh-web` command on PATH still
+      # runs a foreground copy; only one of the two can hold port 3080.
       systemd = {
         # The share symlinks land *inside* ~/.dsh, which nothing else creates this
         # early. Left to itself systemd-tmpfiles would make that parent as part of
@@ -344,19 +359,32 @@
         # Rules are applied in path order, so this holds whichever line comes first.
         tmpfiles.rules = [ "d /home/agent/.dsh 0700 agent users - -" ];
 
-        user.services.dsh-web = {
+        services.dsh-web = {
           description = "dsh web UI";
+          wantedBy = [ "multi-user.target" ];
+          after = [
+            "tailscale-serve.service"
+            "home-manager-agent.service"
+          ];
+          wants = [ "home-manager-agent.service" ];
+          unitConfig.RequiresMountsFor = map (s: "/mnt/persist/${s.guest}") (
+            lib.filter (s: lib.hasPrefix ".dsh/" s.guest) config.permafrost.shares
+          );
+
           serviceConfig = {
             Type = "exec";
+            User = "agent";
+            Group = "users";
+            WorkingDirectory = "/home/agent";
 
             # Started through a login shell, which is the whole point of the
             # line rather than an affectation.
             #
             # An agent harness spawns things: `bash` for every shell tool, git,
             # node, whatever the task calls for. NixOS renders an explicit
-            # Environment="PATH=..." onto a user unit — coreutils, findutils,
-            # grep, sed, systemd and nothing else — and that overrides the user
-            # manager's own environment. dsh's bash tool therefore failed with
+            # Environment="PATH=..." onto a unit — coreutils, findutils, grep,
+            # sed, systemd and nothing else — and dsh's bash tool therefore
+            # failed with
             #
             #   Error: spawn bash ENOENT
             #
@@ -366,10 +394,7 @@
             # `bash -l` sources /etc/profile, which *replaces* PATH rather than
             # appending to it, and brings the rest of the session environment
             # with it — LOCALE_ARCHIVE, TZDIR, NIX_PATH. That makes the service
-            # equivalent to what `ssh permafrost && dsh-web` always gave, which
-            # is what this unit displaced. Verified against a unit pinned to the
-            # real minimal PATH: without -l, `git` is not found; with it, PATH
-            # is the full login PATH and bash, git and node all resolve.
+            # equivalent to what `ssh permafrost && dsh-web` always gave.
             #
             # `exec` so bash replaces itself: MainPID stays the server, and
             # Type=exec and `systemctl stop` keep their usual meaning.
@@ -381,11 +406,12 @@
             # dsh's own three. A login shell does not touch these, and the
             # PATH systemd renders alongside them is superseded above.
             Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
-            WorkingDirectory = "%h";
 
-            # Started by hand, so a crash should stay crashed and be visible in
-            # the journal rather than being papered over by a restart loop.
-            Restart = "no";
+            # Always, not on-failure: a SIGTERM from `pkill` counts as a clean
+            # exit to systemd, and that signal is the agent's only way to
+            # restart it. The delay keeps a genuine crash loop from spinning.
+            Restart = "always";
+            RestartSec = 5;
           };
         };
       };

@@ -120,27 +120,30 @@ in the guest, then reach it from the host.
 
 #### Starting it
 
-The server does not autostart — a guest boots with no web UI listening. Start it by hand:
+The server starts by itself on every boot as the system unit `dsh-web.service`, running as
+the `agent` user. It is ordered after `tailscale-serve` (so it reads the settled tailnet
+name), after home-manager has written `~/.dsh`, and after the `.dsh` shares are mounted. It
+starts whether or not the guest joined the tailnet; without one it is reachable through the
+ssh tunnel only.
+
+To watch it:
 
 ```bash
 ssh permafrost
-systemctl --user start dsh-web     # returns immediately; runs until stopped
+journalctl -u dsh-web -f
 ```
 
-and to watch it, or stop it:
+The `agent` user cannot `systemctl stop` or `start` it — a guest with no route to root has no
+polkit — but can restart it, because the unit is `Restart=always`:
 
 ```bash
-journalctl --user -u dsh-web -f
-systemctl --user stop dsh-web
+pkill -f 'dsh web'     # comes back in 5 seconds; needed after editing cordis.patch.yml
 ```
 
-The same command is also on `PATH` as `dsh-web`, if you would rather have the output in
-front of you than in the journal. It runs in the foreground; `Ctrl-C` stops it. Only one of
-the two can hold port 3080, so the second one you start exits with an address-in-use error.
-
-> `systemctl --user enable dsh-web` is not the missing step — it prints an explanation and
-> does nothing. The unit has no `[Install]` section on purpose, because enabling *is*
-> linking into a target, which is exactly the autostart being avoided. Start it per boot.
+Stopping it for good takes root (ssh certificate) or a reboot. The same command is also on
+`PATH` as `dsh-web`, if you would rather have the output in front of you than in the
+journal. It runs in the foreground; `Ctrl-C` stops it. Only one of the two can hold port
+3080, so the second one exits with an address-in-use error; stop the service's copy first.
 
 #### Reaching it
 
@@ -448,7 +451,7 @@ installed, and network access. Not tried here.
 
 | Path | Role |
 |---|---|
-| `modules/harness/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the `dsh-web` user service, the three data shares, the firewall port |
+| `modules/harness/dsh.nix` | Everything dsh-specific: generated config, the three helpers, the `dsh-web` system unit, the three data shares |
 | `modules/guest/shares.nix` | How a `permafrost.shares` entry becomes a mount and a symlink |
 | `modules/_lib/models.nix` | The shared model catalogue — endpoint, models, thinking budgets |
 | `modules/guest/identity.nix` | The guest's address, `permafrost.identity.ip = 192.168.33.10` |
@@ -493,12 +496,11 @@ localhost. Use the tailnet name or the tunnel — see [§4](#the-browser-ui).
 **The tailnet name does not load, or 502.** For a name that does not resolve, check the launch
 output: it says whether a key was minted, and the guest stays off the tailnet if not
 (`tailscale status` in the guest). A 502 means the node is up but the server is not running
-in the guest — expected on a fresh boot, since it does not autostart. `ssh permafrost` and
-`systemctl --user start dsh-web`, then `systemctl --user status dsh-web` if it does not
-come up.
+in the guest: `systemctl status dsh-web` and `journalctl -u dsh-web` say why. It restarts
+itself every 5 seconds, so a persistent 502 is a startup error, usually visible in the journal.
 
 **`Address already in use` on port 3080.** The service and the foreground `dsh-web` command
-are the same server and cannot both hold the port. `systemctl --user status dsh-web` says
+are the same server and cannot both hold the port. `systemctl status dsh-web` says
 whether the service already has it.
 
 **`Permission denied (publickey)` on `git push` from the web UI or a long-lived pane.** The
