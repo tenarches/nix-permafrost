@@ -30,26 +30,13 @@
     let
       models = import ../_lib/models.nix { inherit pkgs lib; };
 
-      # The address the TLS front end serves and the helper prints. Read from
-      # the guest's own identity rather than injected, so the two cannot
-      # disagree.
-      inherit (config.permafrost.identity) ip fqdn;
-
       # The LAN MCP gateway, declared in harness/mcp.nix.
       inherit (config.permafrost.mcp) gatewayUrl;
 
-      # Every authority the /api Host-header fence has to accept. Port-less
-      # entries match on any port, so this does not have to track tlsPort.
-      trustedHosts = [ ip ] ++ lib.optional (fqdn != null) fqdn;
-
-      # dsh's own plaintext listener, loopback-only, and the TLS port caddy
-      # publishes on the bridge.
+      # dsh's own plaintext listener, loopback-only. `tailscale serve` in
+      # harness/tailscale.nix is what puts https in front of it, and must name
+      # the same port.
       port = 3080;
-      tlsPort = 3443;
-
-      # Under caddy's StateDirectory, so systemd creates and owns it and the
-      # unit's own ReadWritePaths already cover it.
-      tlsDir = "/var/lib/caddy/tls";
 
       # Vendored rather than taken from the llm-agents input, which is still on
       # 0.1.1-rc.2 — see modules/_pkgs/dsh.nix for the version pin and the
@@ -77,38 +64,6 @@
         # Bifrost is unauthenticated on the LAN, but the adapter still resolves
         # the variable named by apiKeyEnv and errors when it is unset.
         BIFROST_API_KEY = "not-required";
-      };
-
-      # Where the launcher's virtiofs share lands. Root-only, so the agent
-      # cannot read the key out of it — which matters only because the agent
-      # no longer has a route to root; see guest/base.nix.
-      vaultTlsDir = "/run/vault-tls";
-
-      # A self-signed leaf for the guest's address. No authority, no chain,
-      # nothing to install anywhere — the browser is asked about this exact
-      # certificate and that is the end of it.
-      #
-      # Idempotent: a `systemctl restart caddy` mid-session must not mint a new
-      # one, or the certificate the browser was just shown stops matching.
-      tlsCert = pkgs.writeShellApplication {
-        name = "dsh-web-tls-cert";
-        runtimeInputs = [ pkgs.openssl ];
-        text = ''
-          if [ -s ${tlsDir}/cert.pem ] && [ -s ${tlsDir}/key.pem ]; then
-            exit 0
-          fi
-
-          mkdir -p ${tlsDir}
-          openssl req -x509 -newkey rsa:2048 -noenc -days 365 \
-            -subj "/CN=${ip}" \
-            -addext "subjectAltName=IP:${ip}" \
-            -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-            -addext "extendedKeyUsage=serverAuth" \
-            -keyout ${tlsDir}/key.pem \
-            -out ${tlsDir}/cert.pem
-          chmod 0600 ${tlsDir}/key.pem
-          chmod 0644 ${tlsDir}/cert.pem
-        '';
       };
 
       # Bifrost (fronting vLLM) speaks OpenAI, so it belongs to the pi-ai adapter.
@@ -241,15 +196,22 @@
       ];
 
       # dsh has no TUI; `dsh web` serves a browser SPA. It stays on loopback and
-      # caddy below is what the host talks to — see the header comment on
-      # services.caddy for why the plaintext bind cannot be exposed directly.
+      # `tailscale serve` is what the tailnet talks to.
       #
-      # --trusted-host names the authority caddy will forward under. The /api
+      # The browser will not run the SPA over plain http from anywhere but
+      # loopback: it mints an id for every RPC with `crypto.randomUUID()`, which
+      # only exists in a secure context, so the first /api call from
+      # `http://<address>` dies with "crypto.randomUUID is not a function".
+      # Serving the same UI over https fixes it at the origin, which is the only
+      # place it can be fixed — there is no dsh setting for this.
+      #
+      # --trusted-host names the authority the proxy forwards under. The /api
       # browser-trust fence accepts loopback unconditionally and otherwise wants
-      # a match here; a port-less entry matches that host on any port, so this
-      # does not have to track tlsPort. Rewriting the Host header at the proxy
-      # would do the same job, at the cost of lying to the application about
-      # which address the browser asked for.
+      # a match here. The name is the node's own tailnet name, which only exists
+      # once the node has joined, so it is read at start rather than baked in.
+      # Rewriting the Host header at the proxy would do the same job, at the
+      # cost of lying to the application about which address the browser asked
+      # for.
       dsh-web = pkgs.writeShellApplication {
         name = "dsh-web";
 
@@ -257,19 +219,31 @@
         # whatever `dsh` the ambient PATH resolves to. The unit below now runs
         # through a login shell, so a bare name would resolve — this is about
         # which build answers, not whether one does.
-        runtimeInputs = [ dshPkg ];
+        runtimeInputs = [
+          dshPkg
+          config.services.tailscale.package
+          pkgs.jq
+        ];
 
         text = ''
+          # Empty when the node is not on the tailnet (no key was delivered, or
+          # tailscaled is down), in which case only loopback is trusted.
+          trusted=()
+          host=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' || true)
+          host=''${host%.}
+          if [ -n "$host" ]; then
+            trusted=(--trusted-host "$host")
+          fi
+
           # --no-open because there is no browser in the guest. Reachable two
           # ways once this is running:
           #
-          #   https://${ip}:${toString tlsPort}
-          #     from the host, through caddy
+          #   https://<node>.<tailnet>.ts.net
+          #     from anywhere on the tailnet the ACL allows, through
+          #     `tailscale serve`
           #   http://localhost:${toString port}
           #     through ssh -L ${toString port}:127.0.0.1:${toString port} permafrost
-          exec dsh web --no-open --port ${toString port} ${
-            lib.concatMapStringsSep " " (h: "--trusted-host ${h}") trustedHosts
-          } "$@"
+          exec dsh web --no-open --port ${toString port} "''${trusted[@]}" "$@"
         '';
       };
 
@@ -351,99 +325,6 @@
 
       environment.variables = dshEnv;
 
-      # Only the TLS front end is published. dsh's own listener stays on
-      # loopback, reachable through an ssh tunnel and nothing else.
-      networking.firewall.allowedTCPPorts = [ tlsPort ];
-
-      # TLS in front of the web UI, because the browser will not run it
-      # otherwise.
-      #
-      # The SPA mints an id for every RPC with `crypto.randomUUID()`, and the
-      # browser only defines that in a *secure context*. `http://${ip}:${toString port}`
-      # is not one — no browser treats a plain-http RFC1918 origin as
-      # trustworthy — so the first /api call dies with "crypto.randomUUID is not
-      # a function" and the provider directory, Agent preset and Models panes
-      # never load. Serving the same UI over https fixes it at the origin, which
-      # is the only place it can be fixed: there is no dsh setting for this.
-      #
-      # This replaces the earlier all-interfaces plaintext bind, and is a
-      # narrowing rather than a widening — the UI drives an agent with its
-      # sandbox off, and it is no longer on the bridge in the clear.
-      #
-      # The certificate is handed to caddy already made, rather than left to
-      # `tls internal`. That directive engages caddy's PKI app, which stands up
-      # a local certificate authority and then tries to add its root to the
-      # system trust store — by shelling out to `sudo`, from a service running
-      # as an unprivileged user. `skip_install_trust` declines the attempt but
-      # leaves the mechanism in place, and a web server that can reach for
-      # privilege to do PKI is the wrong shape for a guest like this one.
-      #
-      # With an explicit certificate none of it is reached: caddy reports
-      # "skipping automatic certificate management because one or more matching
-      # certificates are already loaded", creates no authority, and touches no
-      # trust store. Verified against caddy 2.11.4.
-      #
-      # The guest is rebuilt from scratch on every boot and /var/lib with it, so
-      # the certificate is new each launch and the browser asks to accept it
-      # once per launch. Accepting still yields an https origin, which is the
-      # whole point. The alternatives are both worse: keeping it across boots
-      # needs a host share, and baking it into the store publishes the private
-      # key to anyone who can read /nix/store.
-      services.caddy = {
-        enable = true;
-
-        # There is no plaintext vhost, so the automatic http->https redirect
-        # site would bind :80 for nothing.
-        globalConfig = "auto_https disable_redirects";
-
-        virtualHosts."https://${ip}:${toString tlsPort}" = {
-          # The certificate carries the name as a DNS SAN, so serving it costs
-          # nothing extra. Without this a request arriving under the name
-          # matches no site and caddy answers it itself with an empty 200 —
-          # which looks like success and renders a blank page.
-          serverAliases = lib.optional (fqdn != null) "https://${fqdn}:${toString tlsPort}";
-
-          # Bind the wildcard rather than the address itself. caddy.service
-          # does require network-online.target, so ${ip} would normally be
-          # assigned by then — but that makes the listener's success depend on
-          # systemd-networkd-wait-online agreeing, and this address is
-          # statically configured on an interface matched by a glob. The
-          # wildcard removes the question. Nothing is widened by it: the site
-          # address below still decides which Host is served, caddy matches an
-          # IP site by the connection's local address, and only ${toString tlsPort}
-          # is open in the firewall.
-          listenAddresses = [ "0.0.0.0" ];
-
-          # Nothing public can vouch for an RFC1918 address, so the certificate
-          # is the self-signed one minted below. 502s until `dsh-web` is
-          # running; that is expected, not a fault.
-          extraConfig = ''
-            tls ${tlsDir}/cert.pem ${tlsDir}/key.pem
-            reverse_proxy 127.0.0.1:${toString port}
-          '';
-        };
-      };
-
-      # Minting it is the service's own first act, as its own unprivileged
-      # user, inside the StateDirectory systemd already gives it. Nothing here
-      # runs as root, and nothing asks to.
-      #
-      # preStart rather than serviceConfig.ExecStartPre: it is types.lines, so
-      # it merges instead of colliding if the caddy module ever grows one of
-      # its own.
-      # A Vault-issued certificate, when the launcher managed to get one, takes
-      # precedence over the self-signed fallback below.
-      #
-      # This is the only root-run step in the whole path, and it is
-      # provisioning rather than escalation: systemd starts it as root to
-      # install a file with ownership caddy cannot give itself, and it holds no
-      # Vault access, no key generation, and no trust-store contact. caddy's
-      # own units keep their "nothing runs as root, and nothing asks to"
-      # property.
-      #
-      # ConditionPathExists rather than a shell test, so a launch with no
-      # certificate skips the unit entirely instead of running a no-op — the
-      # skip is then visible in `systemctl status` rather than silent.
       # Deliberately no wantedBy: the unit exists to be started by hand and
       # nothing pulls it in, so a guest boots without a web UI listening. Note
       # that `systemctl --user enable` on it would not do what the name
@@ -505,47 +386,6 @@
             # Started by hand, so a crash should stay crashed and be visible in
             # the journal rather than being papered over by a restart loop.
             Restart = "no";
-          };
-        };
-
-        services = {
-          dsh-web-tls-vault = {
-            description = "Install the Vault-issued dsh web UI certificate";
-            before = [ "caddy.service" ];
-            requiredBy = [ "caddy.service" ];
-            unitConfig = {
-              # Without this the condition below is evaluated before the
-              # virtiofs share is mounted, the unit skips, and a certificate
-              # that was delivered is silently replaced by a self-signed one.
-              RequiresMountsFor = vaultTlsDir;
-              ConditionPathExists = "${vaultTlsDir}/cert.pem";
-            };
-            serviceConfig = {
-              Type = "oneshot";
-              RemainAfterExit = true;
-            };
-            script = ''
-              install -d -m 0750 -o caddy -g caddy ${tlsDir}
-              install -m 0444 -o caddy -g caddy ${vaultTlsDir}/cert.pem ${tlsDir}/cert.pem
-              install -m 0400 -o caddy -g caddy ${vaultTlsDir}/key.pem ${tlsDir}/key.pem
-            '';
-          };
-
-          caddy = {
-            # Unchanged, and load-bearing precisely because it is idempotent:
-            # when the unit above has run, both files already exist and this
-            # exits 0 without generating anything. When it has not, the
-            # self-signed path fires exactly as it did before Vault existed.
-            preStart = "${lib.getExe tlsCert}";
-
-            serviceConfig = {
-              # Both come from the unit caddy ships and neither is wanted:
-              # ${toString tlsPort} is above 1024, and a reverse proxy has no
-              # business holding CAP_NET_ADMIN. An empty assignment in the
-              # drop-in resets the list the packaged unit set.
-              AmbientCapabilities = [ "" ];
-              CapabilityBoundingSet = [ "" ];
-            };
           };
         };
       };
