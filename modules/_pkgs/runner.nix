@@ -187,14 +187,14 @@ pkgs.writeShellScriptBin identity.name ''
 
   read_ts_secret() {
     if [ -z "$SUDO_USER" ]; then
-      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} "$1" 2>/dev/null
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "mint a single-use tailnet auth key for the guest launch" "$1" 2>/dev/null
       return
     fi
     TS_UID=$(id -u "$SUDO_USER")
     ${pkgs.sudo}/bin/sudo -u "$SUDO_USER" -H \
       env XDG_RUNTIME_DIR="/run/user/$TS_UID" \
           DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TS_UID/bus" \
-      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} "$1" 2>/dev/null
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "mint a single-use tailnet auth key for the guest launch" "$1" 2>/dev/null
   }
 
   issue_tailnet_key() {
