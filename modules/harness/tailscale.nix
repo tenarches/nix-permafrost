@@ -1,6 +1,6 @@
 {
   flake.modules.nixos.harness-tailscale =
-    { config, ... }:
+    { config, pkgs, ... }:
 
     # Puts the guest on the tailnet and serves the dsh web UI there.
     #
@@ -60,7 +60,10 @@
           requires = [ "tailscaled-autoconnect.service" ];
           wantedBy = [ "multi-user.target" ];
           unitConfig = onlyWithKey;
-          path = [ tailscale ];
+          path = [
+            tailscale
+            pkgs.jq
+          ];
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
@@ -69,11 +72,23 @@
           # The node registers under the OS hostname, which every guest shares,
           # and is renamed here to the per-launch-host name the runner chose so
           # that guests on different hosts do not contend for one name. The
-          # rename lands within a second of joining; the URL is stable from
-          # then on.
+          # rename takes a round trip to the control plane, and `serve` binds
+          # its config to the node's name at the moment it is created — so it
+          # has to wait for the new name to show up, or it serves a name the
+          # node no longer has and every request finds no handler. The control
+          # plane appends -1, -2 to a name it still holds for a previous
+          # ephemeral node, so the settled name is matched by prefix.
           script = ''
             if [ -s ${hostnameFile} ]; then
-              tailscale set --hostname="$(cat ${hostnameFile})"
+              want="$(cat ${hostnameFile})"
+              tailscale set --hostname="$want"
+              for _ in $(seq 60); do
+                name="$(tailscale status --json | jq -r '.Self.DNSName // empty')"
+                case "$name" in
+                  "$want".* | "$want"-[0-9]*.*) break ;;
+                esac
+                sleep 1
+              done
             fi
             # 3080 is the port dsh-web listens on, set in harness/dsh.nix.
             tailscale serve --bg --https=443 http://127.0.0.1:3080
