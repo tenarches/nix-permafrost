@@ -183,23 +183,23 @@ pkgs.writeShellScriptBin identity.name ''
   TS_TAG="''${TS_TAG:-tag:permafrost-guest}"
   TS_TAILNET="''${TS_TAILNET:--}"
   TS_KEY_TTL="''${TS_KEY_TTL:-300}"
-  TAILNET_DIR="$SOCKET_DIR/tailnet"
+  LAUNCH_DIR="$SOCKET_DIR/launch"
 
-  read_ts_secret() {
+  read_secret() {
     if [ -z "$SUDO_USER" ]; then
-      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "mint a single-use tailnet auth key for the guest launch" "$1" 2>/dev/null
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "$2" "$1" 2>/dev/null
       return
     fi
-    TS_UID=$(id -u "$SUDO_USER")
+    USER_UID=$(id -u "$SUDO_USER")
     ${pkgs.sudo}/bin/sudo -u "$SUDO_USER" -H \
-      env XDG_RUNTIME_DIR="/run/user/$TS_UID" \
-          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TS_UID/bus" \
-      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "mint a single-use tailnet auth key for the guest launch" "$1" 2>/dev/null
+      env XDG_RUNTIME_DIR="/run/user/$USER_UID" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
+      ${pkgs.secretspec}/bin/secretspec get -f ${../../secretspec.toml} --reason "$2" "$1" 2>/dev/null
   }
 
   issue_tailnet_key() {
-    TS_CLIENT_ID=$(read_ts_secret TS_OAUTH_CLIENT_ID) || TS_CLIENT_ID=""
-    TS_CLIENT_SECRET=$(read_ts_secret TS_OAUTH_CLIENT_SECRET) || TS_CLIENT_SECRET=""
+    TS_CLIENT_ID=$(read_secret TS_OAUTH_CLIENT_ID "mint a single-use tailnet auth key for the guest launch") || TS_CLIENT_ID=""
+    TS_CLIENT_SECRET=$(read_secret TS_OAUTH_CLIENT_SECRET "mint a single-use tailnet auth key for the guest launch") || TS_CLIENT_SECRET=""
 
     if [ -z "$TS_CLIENT_ID" ] || [ -z "$TS_CLIENT_SECRET" ]; then
       echo "No Tailscale OAuth client found; the guest will stay off the tailnet." >&2
@@ -255,9 +255,9 @@ pkgs.writeShellScriptBin identity.name ''
     # the same OS hostname by design; this is the only thing that differs.
     NODE_NAME="${identity.name}-$(${pkgs.coreutils}/bin/tr 'A-Z._' 'a-z--' < /proc/sys/kernel/hostname | ${pkgs.coreutils}/bin/tr -cd 'a-z0-9-')"
 
-    printf '%s' "$TS_KEY" > "$TAILNET_DIR/authkey"
-    printf '%s' "$NODE_NAME" > "$TAILNET_DIR/hostname"
-    chmod 0600 "$TAILNET_DIR/authkey" "$TAILNET_DIR/hostname"
+    printf '%s' "$TS_KEY" > "$LAUNCH_DIR/authkey"
+    printf '%s' "$NODE_NAME" > "$LAUNCH_DIR/hostname"
+    chmod 0600 "$LAUNCH_DIR/authkey" "$LAUNCH_DIR/hostname"
     echo "Minted a single-use tailnet auth key for $NODE_NAME ($TS_TAG, valid $TS_KEY_TTL s)."
   }
 
@@ -296,8 +296,8 @@ pkgs.writeShellScriptBin identity.name ''
       # Always created, even when minting does not happen: the share is
       # declared unconditionally in the guest, so the directory behind it has
       # to exist. Empty is how the guest learns to stay off the tailnet.
-      mkdir -p "$TAILNET_DIR"
-      chmod 700 "$TAILNET_DIR"
+      mkdir -p "$LAUNCH_DIR"
+      chmod 700 "$LAUNCH_DIR"
       issue_tailnet_key
       ;;
     *)
@@ -354,7 +354,7 @@ pkgs.writeShellScriptBin identity.name ''
     # Start virtiofsd backends
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
-    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/tailnet.sock" --shared-dir "'$TAILNET_DIR'" --sandbox namespace &
+    ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/launch.sock" --shared-dir "'$LAUNCH_DIR'" --sandbox namespace &
 
     ${lib.concatMapStringsSep "\n" (s: ''
       ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -365,7 +365,7 @@ pkgs.writeShellScriptBin identity.name ''
     echo "Waiting for virtiofsd backends..."
     while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
-    while [ ! -S "$SOCKET_DIR/tailnet.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    while [ ! -S "$SOCKET_DIR/launch.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     ${lib.concatMapStringsSep "\n" (
       s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
     ) shares}
@@ -412,7 +412,7 @@ pkgs.writeShellScriptBin identity.name ''
     --property="Environment=SOCKET_DIR=$SOCKET_DIR"
     --property="Environment=RUNTIME_NAME=$RUNTIME_NAME"
     --property="Environment=SSH_KEYS_DIR=$SSH_KEYS_DIR"
-    --property="Environment=TAILNET_DIR=$TAILNET_DIR"
+    --property="Environment=LAUNCH_DIR=$LAUNCH_DIR"
     --property="Environment=AGENT_PUBKEYS=$AGENT_PUBKEYS"
     --description="Permafrost VM: ${identity.name}"
     # Reclaim the ephemeral disk images whenever the unit stops — clean exit,

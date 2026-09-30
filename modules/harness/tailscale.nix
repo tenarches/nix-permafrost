@@ -12,7 +12,7 @@
     # has to hold a certificate.
     #
     # The auth key is not configured here. The launcher mints a single-use key
-    # on the host and delivers it over a root-only share at /run/tailnet — see
+    # on the host and delivers it over a root-only share at /run/launch — see
     # the runner — because a long-lived credential in this guest would be one
     # any agent running in it could read. When no key was delivered every unit
     # below is skipped, and the guest simply is not on the tailnet.
@@ -21,9 +21,9 @@
     # tagged by the key that registered it, and the tag should be granted
     # inbound 443 from the people who use it and no outbound access at all.
     let
-      tailnetDir = "/run/tailnet";
-      authKey = "${tailnetDir}/authkey";
-      hostnameFile = "${tailnetDir}/hostname";
+      launchDir = "/run/launch";
+      authKey = "${launchDir}/authkey";
+      hostnameFile = "${launchDir}/hostname";
 
       # ConditionPathExists rather than a shell test, so a launch with no key
       # skips the unit outright and the skip is visible in `systemctl status`.
@@ -31,7 +31,7 @@
       # the virtiofs share is mounted, and a key that was delivered would be
       # silently ignored.
       onlyWithKey = {
-        RequiresMountsFor = tailnetDir;
+        RequiresMountsFor = launchDir;
         ConditionPathExists = authKey;
       };
 

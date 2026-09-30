@@ -71,21 +71,22 @@
             socket = "${runtimeDir}/ssh.sock";
           }
           {
-            # A single-use tailnet auth key and the node name to join under,
-            # minted by the runner at launch. Empty when there was no OAuth
-            # client or Tailscale said no, which is how the guest decides to
-            # stay off the tailnet — see harness/tailscale.nix. Runner-only
-            # for the same reason as the keys above: the fleet path has nobody
-            # to ask for one.
+            # Per-launch credential material minted or read by the runner on
+            # the host: a single-use tailnet auth key and node name (see
+            # harness/tailscale.nix) and the dsh browser-session secret (see
+            # harness/dsh.nix). Each file is absent when the runner had
+            # nothing to put there, which is how the guest decides to skip the
+            # feature that needs it. Runner-only for the same reason as the
+            # keys above: the fleet path has nobody to ask.
             #
             # Under /run rather than /mnt: this is per-boot credential
             # material, not persistence, and /mnt/persist means a host share
-            # that outlives the guest.
-            tag = "tailnet";
+            # that outlives the guest. Root-only inside the guest.
+            tag = "launch";
             proto = "virtiofs";
-            source = "host-managed-virtiofsd-at-tailnet";
-            mountPoint = "/run/tailnet";
-            socket = "${runtimeDir}/tailnet.sock";
+            source = "host-managed-virtiofsd-at-launch";
+            mountPoint = "/run/launch";
+            socket = "${runtimeDir}/launch.sock";
           }
         ]
         ++ map (s: {
