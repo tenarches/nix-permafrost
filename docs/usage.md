@@ -13,7 +13,7 @@ via `permafrost.shares`.
 | **`claude`** | Anthropic Specialist | `claude-code` | Native Claude integration. Shares `~/.claude` and `~/.claude.json`. |
 | **`openclaude`** | Claude Code alternative | `openclaude` | An independent fork, vendored from npm rather than `llm-agents.nix`. Keeps its own state: shares `~/.openclaude` and `~/.openclaude.json`. |
 | **`opencode`** | OpenAI Specialist | `opencode` | Interactive access to OpenAI models. Shares `~/.config/opencode`. |
-| **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini and the self-hosted models; ships with `mcporter`. Shares `~/.pi` and `~/.mcporter`. |
+| **`pi`** | Minimal Agentic CLI | `pi` | Optimized for Gemini and the self-hosted models; speaks MCP natively. Shares `~/.pi`. |
 | **`crush`** | Local/Remote Sandbox | `crush` | Optimized for resource-heavy batch processing. Shares `~/.config/crush` and `~/.local/share/crush`. |
 | **`dsh`** | Self-Hosted Inference | `dsh` (DeepSeek Harness) | Local vLLM via the Bifrost gateway only; the MCP gateway, curated skills, browser UI. No TUI, no shares — see [docs/dsh.md](dsh.md). |
 | **`antigravity`** | Web Browsing / GUI | `antigravity-cli` | No shares of its own — nothing it produces is worth carrying across a boot. |
@@ -85,7 +85,6 @@ termination. Thirteen are declared across the guest-wide and per-harness modules
 | `.config/openclaude` | `harness/openclaude.nix` | `~/.openclaude-config`, linked at `~/.openclaude.json` |
 | `.config/opencode` | `harness/opencode.nix` | `~/.config/opencode` |
 | `.pi` | `harness/pi.nix` | `~/.pi` — Gemini OAuth tokens from `pi /login` |
-| `.mcporter` | `harness/pi.nix` | `~/.mcporter` |
 | `.config/crush` | `harness/crush.nix` | `~/.config/crush` |
 | `.local/share/crush` | `harness/crush.nix` | `~/.local/share/crush` |
 | `.dsh/sessions` | `harness/dsh.nix` | `~/.dsh/sessions` — conversation history |
@@ -143,10 +142,10 @@ it has no `mcpServers` concept of its own; see
 [docs/dsh.md](dsh.md#9-the-mcp-gateway). Everything the gateway fronts reaches the
 model under one namespace, as `mcp__gateway__<toolname>`.
 
-`pi` ships `mcporter` and shares `~/.mcporter` from the host, so pointing it at the gateway
-is an edit to `~/.mcporter/mcporter.json` on the host rather than a change here:
-- **Discover tools:** `npx mcporter list`
-- **Call a tool:** `npx mcporter call <server>.<tool> key:value`
+`pi` speaks MCP natively and reads `~/.pi/agent/mcp.json` from the shared `~/.pi`, so
+pointing it at the gateway is an edit on the host rather than a change here:
+`pi mcp add gateway --url <gatewayUrl>`, then set `"exposure": "direct"` on the entry
+(`/mcp` in pi, or edit the file).
 
 The gateway currently needs no authentication. If that changes, the credential belongs in a
 `headers` entry on the harness's own row, not in the URL.

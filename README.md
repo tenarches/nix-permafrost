@@ -6,7 +6,7 @@ boundary, so an agent that may execute arbitrary code or shell commands stays co
 disposable virtual machine.
 
 The whole fleet is one guest, `permafrost`, carrying every harness at once: Claude Code,
-openclaude, opencode, pi (plus mcporter), crush, dsh, antigravity-cli, a row
+openclaude, opencode, pi, crush, dsh, antigravity-cli, a row
 pointed at the LAN MCP gateway, and Playwright. There is one runner, one address,
 one ssh alias — see [Harness Modules](#harness-modules) for why adding a new agent
 means adding one file.
@@ -247,10 +247,10 @@ under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot
 a sparse image is 27–52 ms, and swap is initialised by writing only a header host-side
 (`mkswap`, ~7 ms) rather than `dd`-ing 8 GiB through virtio-blk on every boot.
 
-The thirteen shares carry an agent's auth and history across a boot that otherwise wipes
+The twelve shares carry an agent's auth and history across a boot that otherwise wipes
 everything: `.agents` (every harness's skills and instructions, shared by `guest-base.nix`),
 `.claude`, `.config/claude` (mounted as `.claude-config`, linked to `~/.claude.json`),
-`.config/opencode`, `.pi`, `.mcporter`, `.config/crush`, `.local/share/crush`, and
+`.config/opencode`, `.pi`, `.config/crush`, `.local/share/crush`, and
 `.dsh/sessions`, `.dsh/attachments`, `.dsh/storages`.
 
 **`~/.dsh` is shared three directories deep rather than whole.** Its data persists —
@@ -269,7 +269,7 @@ host unless it is pushed somewhere.
 graph TD
     subgraph HOST_FS["Host Filesystem"]
         H_STORE["/nix/store<br/>(immutable)"]
-        H_SHARES["13 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.openclaude,<br/>~/.config/openclaude, ~/.config/opencode,<br/>~/.pi, ~/.mcporter, ~/.config/crush,<br/>~/.local/share/crush, ~/.dsh/sessions,<br/>~/.dsh/attachments, ~/.dsh/storages"]
+        H_SHARES["12 shares: ~/.agents, ~/.claude,<br/>~/.config/claude, ~/.openclaude,<br/>~/.config/openclaude, ~/.config/opencode,<br/>~/.pi, ~/.config/crush,<br/>~/.local/share/crush, ~/.dsh/sessions,<br/>~/.dsh/attachments, ~/.dsh/storages"]
         H_IMG["/var/lib/permafrost/permafrost/*.img<br/>(sparse, wiped each boot)"]
     end
 
