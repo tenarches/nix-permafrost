@@ -51,9 +51,9 @@
       flake = false;
     };
 
-    # Devenv 2.2 — native shell activation via `devenv hook`
+    # Devenv — Fast, Declarative, Reproducible, and Composable Developer Environments using Nix
     devenv = {
-      url = "github:cachix/devenv/v2.2.1";
+      url = "github:cachix/devenv";
     };
 
     # System-wide theming. Tracks master rather than a release branch, since
