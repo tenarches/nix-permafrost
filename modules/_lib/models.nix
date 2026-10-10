@@ -78,16 +78,36 @@ let
     repetition_penalty = 1.0;
   };
 
-  # Every vLLM model Bifrost serves. `id` is the wire name: Bifrost namespaces
-  # each backend, so vLLM's `Qwen3.8-MXFP4` is `vllm/Qwen3.8-MXFP4` here.
-  # Adding one reaches both harnesses.
+  # Every Qwen model Bifrost serves, from the llama-swap endpoint on petunia
+  # (:7999/v1/models). `id` is the wire name: Bifrost namespaces the backend, so
+  # llama-swap's `Qwen3.8` is `vllm/Qwen3.8` here. Adding one reaches both
+  # harnesses.
+  #
+  # All four report reasoning, function calling and text+image input, which is
+  # why those are not per-model fields. Video input has no field in either
+  # harness's schema. Context windows are the endpoint's `context_length`.
   #
   # The first entry is the default model, so reordering changes what runs.
   models = [
     {
-      id = "vllm/Qwen3.8-MXFP4";
-      name = "Qwen 3.8 27B (256k)";
+      id = "vllm/Qwen3.8";
+      name = "Qwen 3.8 27B MXFP4 (256k)";
       contextWindow = 262144;
+    }
+    {
+      id = "vllm/Qwen3.8-FP8";
+      name = "Qwen 3.8 27B FP8 (256k)";
+      contextWindow = 262144;
+    }
+    {
+      id = "vllm/Qwen3.6-35B-A3B";
+      name = "Qwen 3.6 35B-A3B FP8 (256k)";
+      contextWindow = 262144;
+    }
+    {
+      id = "vllm/Qwen3.8-Flash-Next";
+      name = "Qwen 3.8 Flash Next IQ4R (200k)";
+      contextWindow = 200000;
     }
   ];
 
