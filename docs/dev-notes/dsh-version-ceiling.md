@@ -82,7 +82,7 @@ worktree, with a scratch config dir:
 
 ```bash
 S=$(mktemp -d); mkdir -p $S/.dsh
-# rendered configs: the store paths whose content mentions bifrost / vllm/Qwen3.8
+# rendered configs: the store paths whose content mentions bifrost / radiance/Qwen3.8
 cp <store>-dsh-settings.yaml    $S/.dsh/settings.yaml
 cp <store>-dsh-cordis.patch.yml $S/.dsh/cordis.patch.yml; chmod u+w $S/.dsh/*
 
@@ -100,7 +100,7 @@ Pass criteria, all observed on 0.1.5-rc.3:
    `dsh-client-ui-settings-models`, `dsh-client-ui-model-selection`, …).
 3. `dsh --profile web --dump-config` (same env) shows
    `agent-default-model` patched to `provider: bifrost`,
-   `model: vllm/Qwen3.8`, and the `mcp-gateway` row with
+   `model: radiance/Qwen3.8`, and the `mcp-gateway` row with
    `url: http://petunia.home.lan:8080/mcp`.
 
 ## Not covered (be honest about this)

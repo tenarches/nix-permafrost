@@ -22,7 +22,7 @@ What is set up for you:
 
 | | |
 |---|---|
-| Model | `vllm/Qwen3.8`, 256k context, text + images |
+| Model | `radiance/Qwen3.8`, 256k context, text + images |
 | Reasoning | **medium** by default (the models' own default is `xhigh`) |
 | MCP servers | one row, pointed at the LAN gateway — no setup |
 | Skills | seven curated skills, pre-installed and editable |
@@ -241,18 +241,18 @@ other `Host` gets `403 forbidden`. With no tailnet only loopback is trusted.
 
 The catalogue lives in **`modules/_lib/models.nix`**, on the host, and is shared with `pi` —
 both harnesses read the one source and render it into two config files inside the same
-`permafrost` guest. Four models are declared, under the `vllm/` namespace Bifrost gives the
+`permafrost` guest. Four models are declared, under the `radiance/` namespace Bifrost gives the
 petunia backend:
 
 ```
-vllm/Qwen3.8              <- the default (first entry)
-vllm/Qwen3.8-FP8
-vllm/Qwen3.6-35B-A3B
-vllm/Qwen3.8-Flash-Next   (200k context)
+radiance/Qwen3.8              <- the default (first entry)
+radiance/Qwen3.8-FP8
+radiance/Qwen3.6-35B-A3B
+radiance/Qwen3.8-Flash-Next   (200k context)
 ```
 
 > Declared is not the same as served. Check what Bifrost is actually offering with
-> `curl -s http://petunia.home.lan:8080/v1/models | jq -r '.data[].id' | grep '^vllm/'`.
+> `curl -s http://petunia.home.lan:8080/v1/models | jq -r '.data[].id' | grep '^radiance/'`.
 > Selecting a model the gateway is not serving fails at request time, not at startup.
 
 **Inside the guest**, to switch:

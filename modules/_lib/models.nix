@@ -80,7 +80,7 @@ let
 
   # Every Qwen model Bifrost serves, from the llama-swap endpoint on petunia
   # (:7999/v1/models). `id` is the wire name: Bifrost namespaces the backend, so
-  # llama-swap's `Qwen3.8` is `vllm/Qwen3.8` here. Adding one reaches both
+  # llama-swap's `Qwen3.8` is `radiance/Qwen3.8` here. Adding one reaches both
   # harnesses.
   #
   # All four report reasoning, function calling and text+image input, which is
@@ -90,22 +90,22 @@ let
   # The first entry is the default model, so reordering changes what runs.
   models = [
     {
-      id = "vllm/Qwen3.8";
+      id = "radiance/Qwen3.8";
       name = "Qwen 3.8 27B MXFP4 (256k)";
       contextWindow = 262144;
     }
     {
-      id = "vllm/Qwen3.8-FP8";
+      id = "radiance/Qwen3.8-FP8";
       name = "Qwen 3.8 27B FP8 (256k)";
       contextWindow = 262144;
     }
     {
-      id = "vllm/Qwen3.6-35B-A3B";
+      id = "radiance/Qwen3.6-35B-A3B";
       name = "Qwen 3.6 35B-A3B FP8 (256k)";
       contextWindow = 262144;
     }
     {
-      id = "vllm/Qwen3.8-Flash-Next";
+      id = "radiance/Qwen3.8-Flash-Next";
       name = "Qwen 3.8 Flash Next IQ4R (200k)";
       contextWindow = 200000;
     }
