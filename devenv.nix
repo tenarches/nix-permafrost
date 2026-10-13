@@ -9,6 +9,9 @@
   # Mirrors devShells.default in flake.nix. That devShell is deliberately kept:
   # it is what `nix flake check` and the linting command in CLAUDE.md use.
   packages = [
+    # Same Nix as the guest (modules/guest/base.nix), not pkgs.nix
+    pkgs.nixVersions.latest
+
     # Secrets handling, matching modules/secrets.nix
     pkgs.sops
     pkgs.age
