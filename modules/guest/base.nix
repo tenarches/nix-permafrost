@@ -216,6 +216,18 @@
         networkConfig.IPv6AcceptRA = false;
       };
 
+      # Track the newest Nix nixpkgs ships rather than `pkgs.nix` (the stable
+      # one, 2.34.x). flake.lock fixes the nixpkgs rev, so the version only
+      # moves on `nix flake update`; the assertion turns a regression below
+      # the host's 2.35.2 into an evaluation error instead of a silent one.
+      nix.package = pkgs.nixVersions.latest;
+      assertions = [
+        {
+          assertion = lib.versionAtLeast config.nix.package.version "2.35.2";
+          message = "guest Nix is ${config.nix.package.version}; this project pins >= 2.35.2";
+        }
+      ];
+
       nix.settings = {
         experimental-features = [
           "nix-command"
