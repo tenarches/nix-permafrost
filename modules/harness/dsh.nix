@@ -26,6 +26,12 @@
     # ~/.dsh breaks it. Copying costs nothing here: the guest home is a fresh
     # volume on every boot, so the Nix-rendered defaults are restored each launch
     # and remain editable for the life of the session.
+    #
+    # The model list is the exception to "rendered once": the list baked in here
+    # (modules/_lib/models.nix) is only the offline fallback. `dsh-models` below
+    # rewrites the `models` key of settings.yaml from Bifrost's own /v1/models at
+    # boot and every 15 minutes, so a model added to the fleet reaches dsh with
+    # no rebuild. pi still renders from the baked list.
 
     let
       models = import ../_lib/models.nix { inherit pkgs lib; };
@@ -91,6 +97,11 @@
         xhigh = "xhigh";
       };
 
+      # The settings as first installed. The `models` list inside is the offline
+      # fallback: it is what dsh serves until `dsh-models` has reached Bifrost,
+      # and what stays in place if Bifrost is down. Once the refresh succeeds it
+      # overwrites that one key in the live file; everything else here is left
+      # alone.
       settingsFile = (pkgs.formats.yaml { }).generate "dsh-settings.yaml" {
         llm-pi-ai.providers.${providerId} = {
           displayName = "Bifrost (petunia)";
@@ -247,6 +258,98 @@
         '';
       };
 
+      # Rewrites the model list in the live settings.yaml from what Bifrost
+      # advertises. dsh's own discovery is only a button on the Models page that
+      # hands back a list to adopt by hand, and settings.yaml is the one thing
+      # that decides what a route serves. It is hot-reloaded though, so a
+      # rewrite from outside reaches dsh without a restart.
+      #
+      # The filter keeps what dsh can actually chat with: llama-swap's own
+      # models (owned_by), text-only output (the Qwen-Image entries are image
+      # generators), a known context window, and no `alias` entries, which
+      # duplicate a real model under another name.
+      #
+      # Per model: the window is the endpoint's `context_length`; maxTokens and
+      # the reasoning levels are the constants baked in from Nix, so the
+      # catalogue stays single-sourced. A model that reports
+      # reasoning.default_enabled gets the levels; one that does not (a NoThink
+      # variant) gets `reasoningEfforts: false`, which the adapter schema
+      # documents as declaring a non-reasoning model. Omitting the field would
+      # instead inherit the installed catalog entry, so `false` is the explicit
+      # form.
+      #
+      # Fail-soft by construction. An unreachable gateway, a reply that does not
+      # parse, or a filter that leaves nothing all log to stderr and exit 0 with
+      # the file untouched, so a Bifrost outage leaves dsh on whatever list it
+      # already had, the baked one at first boot.
+      #
+      # The write goes through a copy in the same directory and a rename, so dsh
+      # never reads a half-written file, and edits the web UI made to other keys
+      # survive because only the one key is replaced. DSH_MODELS_URL exists so
+      # the script can be exercised against a fixture.
+      dsh-models-refresh = pkgs.writeShellApplication {
+        name = "dsh-models-refresh";
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.curl
+          pkgs.jq
+          pkgs.yq-go
+        ];
+        text = ''
+          settings="''${DSH_HOME:-$HOME/.dsh}/settings.yaml"
+          url="''${DSH_MODELS_URL:-${models.baseUrl}/models}"
+
+          if [ ! -f "$settings" ]; then
+            echo "dsh-models: $settings does not exist; nothing to refresh" >&2
+            exit 0
+          fi
+
+          work="$(mktemp -d)"
+          tmp="$settings.refresh.$$"
+          trap 'rm -rf "$work"; rm -f "$tmp"' EXIT
+
+          if ! curl --silent --show-error --fail --max-time 10 --retry 2 --retry-delay 2 \
+            --output "$work/raw.json" "$url"; then
+            echo "dsh-models: $url unreachable; keeping the current list" >&2
+            exit 0
+          fi
+
+          if ! jq --argjson maxTokens ${toString models.maxTokens} \
+            --argjson efforts '${builtins.toJSON reasoningEfforts}' \
+            --arg default '${models.defaultModel}' '
+              [ .data[]
+                | select(.owned_by == "llama-swap"
+                    and .architecture.output_modalities == ["text"]
+                    and .context_length != null
+                    and (has("alias") | not))
+                | {
+                    id: .id,
+                    name: .id,
+                    contextWindow: .context_length,
+                    maxTokens: $maxTokens,
+                    input: [ .architecture.input_modalities[] | select(. == "text" or . == "image") ],
+                    reasoningEfforts: (if .reasoning.default_enabled == true then $efforts else false end)
+                  }
+              ]
+              | sort_by(if .id == $default then 0 else 1 end)
+            ' "$work/raw.json" > "$work/models.json"; then
+            echo "dsh-models: reply from $url did not parse; keeping the current list" >&2
+            exit 0
+          fi
+
+          if [ "$(jq length "$work/models.json")" -eq 0 ]; then
+            echo "dsh-models: no usable models in the reply; keeping the current list" >&2
+            exit 0
+          fi
+
+          cp -p "$settings" "$tmp"
+          MODELS="$work/models.json" yq -i \
+            '.llm-pi-ai.providers.${providerId}.models = load(strenv(MODELS))' "$tmp"
+          mv -f "$tmp" "$settings"
+          echo "dsh-models: wrote $(jq length "$work/models.json") models to $settings" >&2
+        '';
+      };
+
       # Cycling models. The default lives in the composition layer rather than
       # settings, so this is a patch-file edit and needs the profile restarted;
       # settings.yaml is the hot-reloaded half.
@@ -254,13 +357,16 @@
         name = "dsh-model";
         runtimeInputs = [ pkgs.yq-go ];
         text = ''
-          PATCH="''${DSH_HOME:-$HOME/.dsh}/cordis.patch.yml"
+          DSH_DIR="''${DSH_HOME:-$HOME/.dsh}"
+          PATCH="$DSH_DIR/cordis.patch.yml"
+          SETTINGS="$DSH_DIR/settings.yaml"
 
           if [ $# -ne 1 ]; then
             echo "usage: dsh-model <model-id>" >&2
             echo >&2
             echo "Available:" >&2
-            ${lib.concatMapStringsSep "\n" (m: ''echo "  ${m.id}" >&2'') models.models}
+            # The live list, which dsh-models keeps current, not the baked one.
+            yq -r '.llm-pi-ai.providers.${providerId}.models[].id | "  " + .' "$SETTINGS" >&2 || true
             echo >&2
             echo "Current: $(yq -r '.[] | select(.id == "agent-default-model") | .config.model' "$PATCH")" >&2
             exit 2
@@ -371,88 +477,132 @@
         # Skipped when the runner delivered nothing, and it re-checks the shape
         # itself: dsh throws at startup on a malformed record, and a web UI
         # that will not start is a worse failure than one that logs you out.
-        services.dsh-web-credentials = {
-          description = "Seed the dsh browser-session secret";
-          before = [ "dsh-web.service" ];
-          unitConfig = {
-            RequiresMountsFor = "/run/launch";
-            ConditionPathExists = "/run/launch/session_secret";
-          };
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-          };
-          script = ''
-            secret="$(cat /run/launch/session_secret)"
-            if ! printf '%s' "$secret" | grep -qE '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'; then
-              echo "session secret is malformed; leaving dsh to mint its own" >&2
-              exit 0
-            fi
+        services = {
+          dsh-web-credentials = {
+            description = "Seed the dsh browser-session secret";
+            before = [ "dsh-web.service" ];
+            unitConfig = {
+              RequiresMountsFor = "/run/launch";
+              ConditionPathExists = "/run/launch/session_secret";
+            };
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+            };
+            script = ''
+              secret="$(cat /run/launch/session_secret)"
+              if ! printf '%s' "$secret" | grep -qE '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'; then
+                echo "session secret is malformed; leaving dsh to mint its own" >&2
+                exit 0
+              fi
 
-            umask 077
-            tmp="$(mktemp -p /home/agent/.dsh)"
-            printf 'version: 1\nrecords:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: %s\n' "$secret" > "$tmp"
-            chown agent:users "$tmp"
-            mv -f "$tmp" /home/agent/.dsh/.credentials.yaml
-          '';
+              umask 077
+              tmp="$(mktemp -p /home/agent/.dsh)"
+              printf 'version: 1\nrecords:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: %s\n' "$secret" > "$tmp"
+              chown agent:users "$tmp"
+              mv -f "$tmp" /home/agent/.dsh/.credentials.yaml
+            '';
+          };
+
+          # Refreshes the model list from Bifrost: once at boot, before dsh-web, and
+          # then on the timer below. Same shape as the credentials unit above and
+          # for the same reasons: a system unit running as the agent, so it can be
+          # ordered against home-manager-agent (which installs the baked settings
+          # this edits) and against dsh-web.
+          #
+          # network-online because the first run has a gateway to ask. It is only
+          # ordering and a soft want: the script is fail-soft, so a network that
+          # never comes up costs the refresh, not the boot.
+          dsh-models = {
+            description = "Refresh the dsh model list from Bifrost";
+            after = [
+              "home-manager-agent.service"
+              "network-online.target"
+            ];
+            wants = [
+              "home-manager-agent.service"
+              "network-online.target"
+            ];
+            before = [ "dsh-web.service" ];
+            serviceConfig = {
+              Type = "oneshot";
+              User = "agent";
+              Group = "users";
+              ExecStart = lib.getExe dsh-models-refresh;
+            };
+          };
+
+          dsh-web = {
+            description = "dsh web UI";
+            wantedBy = [ "multi-user.target" ];
+            after = [
+              "tailscale-serve.service"
+              "home-manager-agent.service"
+            ];
+            wants = [
+              "home-manager-agent.service"
+              "dsh-web-credentials.service"
+              "dsh-models.service"
+            ];
+            unitConfig.RequiresMountsFor = map (s: "/mnt/persist/${s.guest}") (
+              lib.filter (s: lib.hasPrefix ".dsh/" s.guest) config.permafrost.shares
+            );
+
+            serviceConfig = {
+              Type = "exec";
+              User = "agent";
+              Group = "users";
+              WorkingDirectory = "/home/agent";
+
+              # Started through a login shell, which is the whole point of the
+              # line rather than an affectation.
+              #
+              # An agent harness spawns things: `bash` for every shell tool, git,
+              # node, whatever the task calls for. NixOS renders an explicit
+              # Environment="PATH=..." onto a unit — coreutils, findutils, grep,
+              # sed, systemd and nothing else — and dsh's bash tool therefore
+              # failed with
+              #
+              #   Error: spawn bash ENOENT
+              #
+              # which takes the whole toolchain with it: no tests, no commits, no
+              # background jobs. There is not even a `sh` on that PATH.
+              #
+              # `bash -l` sources /etc/profile, which *replaces* PATH rather than
+              # appending to it, and brings the rest of the session environment
+              # with it — LOCALE_ARCHIVE, TZDIR, NIX_PATH. That makes the service
+              # equivalent to what `ssh permafrost && dsh-web` always gave.
+              #
+              # `exec` so bash replaces itself: MainPID stays the server, and
+              # Type=exec and `systemctl stop` keep their usual meaning.
+              #
+              # Absolute path to bash because, at the moment this line runs, the
+              # minimal PATH is still in force and there is no shell on it.
+              ExecStart = "${lib.getExe pkgs.bashInteractive} -l -c 'exec ${lib.getExe dsh-web}'";
+
+              # dsh's own three. A login shell does not touch these, and the
+              # PATH systemd renders alongside them is superseded above.
+              Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
+
+              # Always, not on-failure: a SIGTERM from `pkill` counts as a clean
+              # exit to systemd, and that signal is the agent's only way to
+              # restart it. The delay keeps a genuine crash loop from spinning.
+              Restart = "always";
+              RestartSec = 5;
+            };
+          };
         };
 
-        services.dsh-web = {
-          description = "dsh web UI";
-          wantedBy = [ "multi-user.target" ];
-          after = [
-            "tailscale-serve.service"
-            "home-manager-agent.service"
-          ];
-          wants = [
-            "home-manager-agent.service"
-            "dsh-web-credentials.service"
-          ];
-          unitConfig.RequiresMountsFor = map (s: "/mnt/persist/${s.guest}") (
-            lib.filter (s: lib.hasPrefix ".dsh/" s.guest) config.permafrost.shares
-          );
-
-          serviceConfig = {
-            Type = "exec";
-            User = "agent";
-            Group = "users";
-            WorkingDirectory = "/home/agent";
-
-            # Started through a login shell, which is the whole point of the
-            # line rather than an affectation.
-            #
-            # An agent harness spawns things: `bash` for every shell tool, git,
-            # node, whatever the task calls for. NixOS renders an explicit
-            # Environment="PATH=..." onto a unit — coreutils, findutils, grep,
-            # sed, systemd and nothing else — and dsh's bash tool therefore
-            # failed with
-            #
-            #   Error: spawn bash ENOENT
-            #
-            # which takes the whole toolchain with it: no tests, no commits, no
-            # background jobs. There is not even a `sh` on that PATH.
-            #
-            # `bash -l` sources /etc/profile, which *replaces* PATH rather than
-            # appending to it, and brings the rest of the session environment
-            # with it — LOCALE_ARCHIVE, TZDIR, NIX_PATH. That makes the service
-            # equivalent to what `ssh permafrost && dsh-web` always gave.
-            #
-            # `exec` so bash replaces itself: MainPID stays the server, and
-            # Type=exec and `systemctl stop` keep their usual meaning.
-            #
-            # Absolute path to bash because, at the moment this line runs, the
-            # minimal PATH is still in force and there is no shell on it.
-            ExecStart = "${lib.getExe pkgs.bashInteractive} -l -c 'exec ${lib.getExe dsh-web}'";
-
-            # dsh's own three. A login shell does not touch these, and the
-            # PATH systemd renders alongside them is superseded above.
-            Environment = lib.mapAttrsToList (k: v: "${k}=${v}") dshEnv;
-
-            # Always, not on-failure: a SIGTERM from `pkill` counts as a clean
-            # exit to systemd, and that signal is the agent's only way to
-            # restart it. The delay keeps a genuine crash loop from spinning.
-            Restart = "always";
-            RestartSec = 5;
+        # OnUnitActiveSec counts from the last time the service was active, and
+        # the boot-time run above is what first sets that. OnBootSec is the
+        # backstop for a boot where that run never happened, so the timer
+        # cannot sit idle forever.
+        timers.dsh-models = {
+          description = "Refresh the dsh model list periodically";
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "15min";
+            OnUnitActiveSec = "15min";
           };
         };
       };

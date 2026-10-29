@@ -87,6 +87,12 @@ let
   # why those are not per-model fields. Video input has no field in either
   # harness's schema. Context windows are the endpoint's `context_length`.
   #
+  # This list is the offline fallback for dsh and the source for pi. dsh
+  # renders it into its first-boot settings.yaml and then refreshes the model
+  # list from Bifrost's /v1/models (see `dsh-models` in harness/dsh.nix), so
+  # the live dsh list can differ from this one; pi has no such refresh and
+  # reads only this.
+  #
   # The first entry is the default model, so reordering changes what runs.
   models = [
     {
