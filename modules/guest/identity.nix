@@ -78,8 +78,7 @@
 
             Off by default because the path is upstream-fragile. It needs a
             Spectrum-patched cloud-hypervisor pinned to 51.0, a crosvm pinned to
-            an older vhost-user dialect, and a Mesa kept on crosvm's own glibc
-            generation (see flake.nix and modules/_pkgs/crosvm-graphics.nix).
+            an older vhost-user dialect (see modules/_pkgs/crosvm-graphics.nix).
             Turning it on also means building cloud-hypervisor from source, and
             it only works through the runner: the fleet path's
             microvm@<name>.service is a system unit with no compositor to attach

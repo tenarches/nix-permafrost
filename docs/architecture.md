@@ -49,9 +49,8 @@ The whole of `flake.nix` outside `inputs` is one line:
 there — every `perSystem`, every `nixosConfiguration`, every package is contributed by a
 module file under `modules/`.
 
-Two nixpkgs instances exist, and only one follows the graph above.
-`nixpkgs-crosvm` is pinned to `nixos-25.05` deliberately, *not* an oversight: it exists
-solely to build an older `crosvm` whose vhost-user dialect still matches the
+`crosvm` is built from an older source revision (470e07c) on the host's own nixpkgs,
+deliberately, *not* an oversight: its vhost-user dialect still matches the
 Spectrum-patched `cloud-hypervisor` that `permafrost.gui` needs (see
 `modules/guest/launch-runner.nix` and `modules/_pkgs/crosvm-graphics.nix`).
 

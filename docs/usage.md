@@ -297,7 +297,7 @@ The runner preflights for a compositor and exits with an explanation if there is
 **Why this is off by default.** It rests on three version pins that upstream does not currently hold together:
 
 1. `cloud-hypervisor-graphics` comes from Spectrum's virtio-gpu patches, which apply only to cloud-hypervisor 51.0, while nixpkgs ships 53.0 (`overlays/cloud-hypervisor-graphics.nix`). Enabling `permafrost.gui` therefore builds cloud-hypervisor from source.
-2. That fork requests `GET_SHARED_MEMORY_REGIONS` (message 1004, protocol bit `0x8000_0000`), which crosvm has since replaced with the standardized `SHMEM_MAP`. Hence the `nixpkgs-crosvm` pin in `flake.nix`; without it the guest dies at boot with `VhostUserGetSharedMemoryRegions(Disconnected)`.
+2. That fork requests `GET_SHARED_MEMORY_REGIONS` (message 1004, protocol bit `0x8000_0000`), which crosvm has since replaced with the standardized `SHMEM_MAP`. Hence the pinned crosvm source in `modules/_pkgs/crosvm-graphics.nix`; without it the guest dies at boot with `VhostUserGetSharedMemoryRegions(Disconnected)`.
 3. That older crosvm links against glibc 2.40 while the host's Mesa needs `GLIBC_ABI_GNU2_TLS`, so its Mesa loader is redirected to its own generation (`modules/_pkgs/crosvm-graphics.nix`). Without that, rutabaga falls back to a 2D backend and the guest reports `invalid capset id 4294967295` — no cross-domain context, so the proxy cannot work.
 
 Extra variables inside a `permafrost.gui = true` guest (`modules/guest/graphics.nix`): `WAYLAND_DISPLAY=wayland-1` and `DISPLAY=:0`. Diagnostics when nothing appears:

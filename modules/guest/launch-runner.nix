@@ -45,11 +45,9 @@
         graphics = lib.optionalAttrs cfg.gui {
           enable = true;
           socket = "${runtimeDir}/gpu.sock";
-          # Pinned: must match the fork's vhost-user dialect. See the
-          # nixpkgs-crosvm comment in flake.nix.
-          crosvmPackage = import ../_pkgs/crosvm-graphics.nix {
-            cpkgs = inputs.nixpkgs-crosvm.legacyPackages.${pkgs.stdenv.hostPlatform.system};
-          };
+          # Pinned source: must match the fork's vhost-user dialect. See the
+          # header of modules/_pkgs/crosvm-graphics.nix.
+          crosvmPackage = import ../_pkgs/crosvm-graphics.nix { inherit pkgs; };
         };
 
         shares = [
