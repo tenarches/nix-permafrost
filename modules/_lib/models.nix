@@ -1,4 +1,9 @@
-{ pkgs, lib }:
+{
+  pkgs,
+  lib,
+  # Bifrost's API root, /v1 included; the option is permafrost.inference.baseUrl.
+  baseUrl,
+}:
 
 # The self-hosted inference fleet, in one place — reached through Bifrost, the
 # LAN gateway that fronts vLLM (and serves the MCP endpoint on the same port).
@@ -10,13 +15,11 @@
 # drift on a model add. Describe them once here and render per consumer.
 
 let
-  # Bifrost's OpenAI-compatible surface, which forwards to vLLM. Not the bare
-  # host: pi's `baseUrl` and dsh's `baseURL` are both the API root, /v1
-  # included. Bifrost passes the vLLM-specific request fields below (`top_k`,
+  # `baseUrl` (an argument, from permafrost.inference.baseUrl) is Bifrost's
+  # OpenAI-compatible surface, which forwards to vLLM. Not the bare host: pi's
+  # `baseUrl` and dsh's `baseURL` are both the API root, /v1 included. Bifrost passes the vLLM-specific request fields below (`top_k`,
   # `min_p`, `repetition_penalty`, `reasoning_effort`) through unchanged —
   # vLLM's own validation errors come back verbatim.
-  baseUrl = "http://petunia.home.lan:8080/v1";
-
   # Reasoning is on by default at `medium`. The endpoint's own default is
   # xhigh, which burns most of a 128k context on thinking before the model
   # reaches the task; medium is the level these models are actually useful at.
