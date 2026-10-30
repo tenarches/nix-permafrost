@@ -3,9 +3,17 @@
   # pi. It speaks MCP natively; servers are added in ~/.pi/agent/mcp.json,
   # which lives in the shared `.pi` directory.
   flake.modules.nixos.harness-pi =
-    { pkgs, lib, ... }:
+    {
+      pkgs,
+      lib,
+      config,
+      ...
+    }:
     let
-      models = import ../_lib/models.nix { inherit pkgs lib; };
+      models = import ../_lib/models.nix {
+        inherit pkgs lib;
+        inherit (config.permafrost.inference) baseUrl;
+      };
       agents = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system};
     in
     {

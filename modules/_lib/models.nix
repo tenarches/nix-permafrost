@@ -6,7 +6,7 @@
 }:
 
 # The self-hosted inference fleet, in one place — reached through Bifrost, the
-# LAN gateway that fronts vLLM (and serves the MCP endpoint on the same port).
+# LAN gateway that fronts vLLM (and serves the MCP endpoint on the same host).
 #
 # Two harnesses need this catalogue in two different shapes: pi reads a
 # models.json of its own design, dsh reads an `llm-pi-ai` provider profile in
@@ -17,9 +17,11 @@
 let
   # `baseUrl` (an argument, from permafrost.inference.baseUrl) is Bifrost's
   # OpenAI-compatible surface, which forwards to vLLM. Not the bare host: pi's
-  # `baseUrl` and dsh's `baseURL` are both the API root, /v1 included. Bifrost passes the vLLM-specific request fields below (`top_k`,
-  # `min_p`, `repetition_penalty`, `reasoning_effort`) through unchanged —
-  # vLLM's own validation errors come back verbatim.
+  # `baseUrl` and dsh's `baseURL` are both the API root, /v1 included.
+  # Bifrost passes the vLLM-specific request fields below (`top_k`, `min_p`,
+  # `repetition_penalty`, `reasoning_effort`) through unchanged — vLLM's own
+  # validation errors come back verbatim.
+
   # Reasoning is on by default at `medium`. The endpoint's own default is
   # xhigh, which burns most of a 128k context on thinking before the model
   # reaches the task; medium is the level these models are actually useful at.

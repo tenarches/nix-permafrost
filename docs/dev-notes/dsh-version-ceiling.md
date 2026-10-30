@@ -101,7 +101,7 @@ Pass criteria, all observed on 0.1.5-rc.3:
 3. `dsh --profile web --dump-config` (same env) shows
    `agent-default-model` patched to `provider: bifrost`,
    `model: radiance/Qwen3.8`, and the `mcp-gateway` row with
-   `url: http://petunia.home.lan:8080/mcp`.
+   `url: https://inference.home.lan/mcp`.
 
 ## Not covered (be honest about this)
 
@@ -138,6 +138,6 @@ opt-in plugins.
 ## Related
 
 - Endpoint: inference and MCP both go through Bifrost
-  (`http://petunia.home.lan:8080`), models in `modules/_lib/models.nix`.
+  (`https://inference.home.lan`), models in `modules/_lib/models.nix`.
 - `modules/harness/dsh.nix` renders `settings.yaml` and `cordis.patch.yml`
   (copied into the guest, not symlinked).

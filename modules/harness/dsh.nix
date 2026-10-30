@@ -34,7 +34,10 @@
     # no rebuild. pi still renders from the baked list.
 
     let
-      models = import ../_lib/models.nix { inherit pkgs lib; };
+      models = import ../_lib/models.nix {
+        inherit pkgs lib;
+        inherit (config.permafrost.inference) baseUrl;
+      };
 
       # The LAN MCP gateway, declared in harness/mcp.nix.
       inherit (config.permafrost.mcp) gatewayUrl;
@@ -66,6 +69,10 @@
         # including the ones going to our own endpoint. Any non-empty value is an
         # authoritative opt-out.
         DSH_TELEMETRY_DISABLED = "1";
+
+        # Node ships its own CA bundle and ignores the system one; the gateway
+        # is https with the internal CA (guest/ca-trust.nix).
+        NODE_EXTRA_CA_CERTS = "/etc/ssl/certs/ca-certificates.crt";
 
         # Bifrost is unauthenticated on the LAN, but the adapter still resolves
         # the variable named by apiKeyEnv and errors when it is unset.
@@ -106,7 +113,7 @@
         llm-pi-ai.providers.${providerId} = {
           displayName = "Bifrost (petunia)";
           api = "openai-completions";
-          baseURL = models.baseUrl;
+          baseURL = config.permafrost.inference.baseUrl;
 
           # The endpoint wants no key, but the adapter resolves a credential per
           # request and errors when the named variable is unset — so the name has
@@ -297,7 +304,7 @@
         ];
         text = ''
           settings="''${DSH_HOME:-$HOME/.dsh}/settings.yaml"
-          url="''${DSH_MODELS_URL:-${models.baseUrl}/models}"
+          url="''${DSH_MODELS_URL:-${config.permafrost.inference.baseUrl}/models}"
 
           if [ ! -f "$settings" ]; then
             echo "dsh-models: $settings does not exist; nothing to refresh" >&2

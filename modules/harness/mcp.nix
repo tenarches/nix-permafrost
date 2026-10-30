@@ -14,10 +14,24 @@
   flake.modules.nixos.harness-mcp =
     { lib, ... }:
     {
+      # The inference API root for pi and dsh. It lives here with the MCP
+      # address because both are served by the one gateway edge.
+      options.permafrost.inference.baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "https://inference.home.lan/v1";
+        example = "https://gateway.example/v1";
+        description = ''
+          OpenAI-compatible API root of the LAN inference gateway (Bifrost),
+          `/v1` included. pi's `baseUrl`, dsh's `baseURL` and the dsh model
+          refresh all read it. The endpoint is https under the internal CA,
+          which guest/ca-trust.nix makes the guest trust.
+        '';
+      };
+
       options.permafrost.mcp.gatewayUrl = lib.mkOption {
         type = lib.types.str;
-        default = "http://petunia.home.lan:8080/mcp";
-        example = "http://gateway.example:8080/mcp";
+        default = "https://inference.home.lan/mcp";
+        example = "https://gateway.example/mcp";
         description = ''
           Address of the LAN MCP gateway, including the path it serves the
           protocol on.

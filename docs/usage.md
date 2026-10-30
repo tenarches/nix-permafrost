@@ -134,7 +134,7 @@ fronts all of them on one streamable-http endpoint. `modules/harness/mcp.nix` de
 address and nothing else:
 
 ```nix
-permafrost.mcp.gatewayUrl = "http://petunia.home.lan:8080/mcp";  # the default
+permafrost.mcp.gatewayUrl = "https://inference.home.lan/mcp";  # the default
 ```
 
 `dsh` is the harness wired to it, as a single plugin row in its own composition layer —

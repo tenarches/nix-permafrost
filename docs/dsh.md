@@ -15,7 +15,7 @@ against that release, the remaining config keys were not.
 `dsh` is one of several **harnesses** carried by the one disposable guest this repo boots —
 see the [README](../README.md) if you have not met `permafrost` yet. This harness runs the [DeepSeek
 Harness](https://github.com/deepseek-ai/deepseek-harness), pointed at the **Bifrost
-gateway at `petunia.home.lan:8080`**, which fronts the local vLLM server — no external API, no key,
+gateway at `inference.home.lan`**, which fronts the local vLLM server — no external API, no key,
 nothing leaves the network.
 
 What is set up for you:
@@ -252,7 +252,7 @@ radiance/Qwen3.8-Flash-Next   (200k context)
 ```
 
 > Declared is not the same as served. Check what Bifrost is actually offering with
-> `curl -s http://petunia.home.lan:8080/v1/models | jq -r '.data[].id' | grep '^radiance/'`.
+> `curl -s https://inference.home.lan/v1/models | jq -r '.data[].id' | grep '^radiance/'`.
 > Selecting a model the gateway is not serving fails at request time, not at startup.
 
 **Inside the guest**, to switch:
@@ -417,7 +417,7 @@ the LAN gateway rather than at anything running in the guest:
   config:
     serverName: gateway          # [A-Za-z0-9_-]{1,32}, must be unique
     transport: streamable-http
-    url: http://petunia.home.lan:8080/mcp
+    url: https://inference.home.lan/mcp
 ```
 
 Its tools appear as `mcp__gateway__<toolname>` — one namespace for everything the gateway
