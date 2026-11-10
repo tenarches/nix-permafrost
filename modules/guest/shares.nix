@@ -63,14 +63,23 @@
       # Mounting a share into a directory that is itself on the ephemeral home
       # volume would hide whatever the harness expects to find there, so the
       # mount lands under /mnt/persist and is symlinked into place instead.
-      config.systemd.tmpfiles.rules =
-        map (s: "d /mnt/persist/${s.guest} 0700 agent users - -") shares
-        ++ map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") shares
-        ++ lib.concatMap (
-          s:
-          lib.optional (
-            s.link != null
-          ) "L+ /home/agent/${s.link} - - - - /mnt/persist/${s.guest}/${builtins.baseNameOf s.link}"
-        ) shares;
+      #
+      # /mnt/persist itself is 0700 and owned by agent. A virtiofs mount shows
+      # the mode of the host directory behind it, which need not be 0700, so
+      # the parent is what keeps every other account in the guest (adurable,
+      # see guest/adurable.nix) from reaching a share by path. The mount units
+      # create the directory first as root:root 0755, and `d` corrects an
+      # existing directory.
+      config.systemd.tmpfiles.rules = [
+        "d /mnt/persist 0700 agent users - -"
+      ]
+      ++ map (s: "d /mnt/persist/${s.guest} 0700 agent users - -") shares
+      ++ map (s: "L+ /home/agent/${s.guest} - - - - /mnt/persist/${s.guest}") shares
+      ++ lib.concatMap (
+        s:
+        lib.optional (
+          s.link != null
+        ) "L+ /home/agent/${s.link} - - - - /mnt/persist/${s.guest}/${builtins.baseNameOf s.link}"
+      ) shares;
     };
 }
