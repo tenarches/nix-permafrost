@@ -23,8 +23,8 @@
   #   /mnt/persist for it. What it writes goes when the VM stops and never
   #   reaches the host.
   # - /home/agent and /mnt/persist are 0700 and owned by agent (the rule for
-  #   /mnt/persist is in guest/shares.nix), and /proc hides other users'
-  #   processes from it (guest/hidepid.nix).
+  #   /mnt/persist is in guest/shares.nix). /proc is not hidden: adurable can
+  #   list the processes of agent (see "Not done" in docs/reference.md).
   # - The Nix daemon accepts it as a client but it is not a trusted user, as
   #   `agent` is not (see base.nix): a trusted user is root-equivalent.
   flake.modules.nixos.guest-adurable =
