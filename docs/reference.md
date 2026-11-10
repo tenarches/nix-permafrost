@@ -88,6 +88,56 @@ from an external upstream flake, for hermetic reliability. That is a packaging d
 `harness/openclaude.nix` is a harness module like any other, declaring its own packages and
 its own shares.*
 
+## Guest accounts
+
+The guest has two logins that run commands. Both are declared in `modules/guest/`.
+
+| Account | uid / gid | Home | Reaches the host through | Login |
+|---|---|---|---|---|
+| `agent` | 1000 / `users` | `/home/agent`, the `home.img` volume | the shares under `/mnt/persist`, linked into its home | serial console, ssh with the launching user's keys, ssh with a CA certificate |
+| `adurable` | 1001 / 1001 (`adurable`) | `/home/adurable`, the `adurable-home.img` volume | nothing | ssh with a CA certificate only |
+
+`agent` is the account of the owner's harnesses (`modules/harness/*.nix`). Their sign-in
+files are the virtiofs shares, and the launch credentials are in `/run/launch`. Anything
+that reads untrusted text must not run as `agent`.
+
+`adurable` (`modules/guest/adurable.nix`) is the account pi-durable runs its model tool
+commands as:
+
+- **No key, no password.** The password is locked (`!`). `AuthorizedKeysFile none` and
+  `AllowAgentForwarding no` apply to it in a `Match User adurable` block, so the keys the
+  runner harvests for `agent` and any `~/.ssh/authorized_keys` it writes do not log in. A
+  certificate does, when one of its principals is `adurable`. That is sshd's default rule
+  (no `AuthorizedPrincipalsFile`, see `modules/guest/ssh-ca.nix`), so a certificate for
+  `agent` or `root` does not log in as `adurable`, and the reverse. The Vault SSH CA role
+  that signs for it is `ssh-client-signer/sign/durable`.
+- **No groups.** Its primary group is its own. It is not in `users`, `video`, `render`,
+  `systemd-journal` or `wheel`.
+- **No share.** There is no virtiofs share and nothing under `/mnt/persist` for it. Its home
+  is a disk volume recreated on every boot, so what it writes goes when the VM stops. The
+  home is mode 0700, and `tmpfiles` creates `work` and `workspaces` in it.
+- **Closed to it:** `/home/agent` is 0700. `/mnt/persist` is 0700 and owned by `agent`
+  (`modules/guest/shares.nix`), so a share cannot be reached by path whatever mode its host
+  directory has. `/run/launch` is a virtiofs share whose host directory the runner makes
+  0700, so only root reads it.
+- **Nix.** `nix.settings.allowed-users` lists `agent` and `adurable`, so both can use the
+  daemon. `trusted-users` stays `root`. `git`, `bash` and `nix` are on its `PATH` from the
+  system packages.
+
+Not done: `/proc` is not mounted with `hidepid`, so `adurable` can list the processes of
+`agent`. NixOS removed its `security.hideProcessInformation` module because the mount option
+breaks cgroups v2 session tracking, and systemd does not support it as a global setting.
+It needs a boot test of the guest before it is added.
+
+One local service is reachable by every account: the dsh web UI listens on
+`127.0.0.1:3080` (`modules/harness/dsh.nix` sets the port), and any local user can connect.
+Its browser login is a signed cookie. The one-time token that starts it is printed to the
+journal of `dsh-web`, which `adurable` cannot read (it is not in `systemd-journal`). The
+`/api` Host check accepts loopback, and that is a check on the Host header, not a login.
+Whether a loopback request without the cookie is refused is not verified. The tailscale
+daemon socket is also open to every account, with read-only status for any account that
+is not root.
+
 ## Secret Injection Architecture — as designed, not as built
 
 Handling secrets securely in declarative VMs is notoriously difficult. Permafrost's design

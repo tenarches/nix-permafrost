@@ -213,7 +213,7 @@ created and then never bridged in.
 ## Guest Storage Architecture
 
 Every writable path in the guest is a sparse disk image on the host, destroyed and recreated
-on every boot. Only `/` remains RAM-backed. All four volumes are declared in one place,
+on every boot. Only `/` remains RAM-backed. All five volumes are declared in one place,
 `modules/guest/base.nix`.
 
 | # | Image | Mount | Filesystem | Size | Device |
@@ -222,10 +222,17 @@ on every boot. Only `/` remains RAM-backed. All four volumes are declared in one
 | 1 | `home.img` | `/home/agent` | btrfs + `compress=zstd:1` | 50 GiB | `/dev/vdb` |
 | 2 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
 | 3 | `swap.img` | *(raw)* | — | 8 GiB | `/dev/vdd` |
+| 4 | `adurable-home.img` | `/home/adurable` | btrfs + `compress=zstd:1` | 32 GiB | `/dev/vde` |
 
 `storeOnDisk` is `false` (the Nix store is a virtiofs share), so `withDriveLetters` applies
 no offset and letters follow list order. The swap letter is **derived** via microvm.nix's own
 `withDriveLetters` helper, matching on `mountPoint == null`, so it survives reordering.
+
+`adurable-home.img` is last so the letters of the volumes before it do not move. It is the
+home of the `adurable` account (see [Guest accounts](reference.md#guest-accounts)). It is a
+disk volume and not a share: `preStart` and `ExecStopPost` already remove every `*.img` in
+the state directory, so it needs no code of its own in the runner, and nothing `adurable`
+writes reaches the host.
 
 ### Why this shape
 
