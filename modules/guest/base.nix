@@ -74,6 +74,21 @@
           size = 16384;
           autoCreate = false;
         }
+        {
+          # The adurable account's home (see guest/adurable.nix), its own image so
+          # nothing it writes shares a filesystem with the agent's home. Last in the
+          # list on purpose: the drive letters of the volumes above stay where they
+          # were. Recreated on every boot like the rest — preStart's `rm -f *.img`
+          # and the unit's ExecStopPost already cover it, since both glob the whole
+          # state directory. It is a disk volume and not a share, so nothing
+          # adurable writes reaches the host. Sparse, so the size is only a cap.
+          image = img "adurable-home";
+          mountPoint = "/home/adurable";
+          fsType = "btrfs";
+          label = "adurable-home";
+          size = 32768; # 32 GiB
+          autoCreate = true;
+        }
       ];
 
       # Derive the swap device letter with microvm.nix's own helper rather than
@@ -186,6 +201,12 @@
         # since isNormalUser implies createHome = true and homeMode = "700", and
         # update-users-groups chowns the mounted directory during activation.
         "/home/agent".options = [
+          "compress=zstd:1"
+          "discard"
+        ];
+
+        # Same options and reasons as the agent's home above.
+        "/home/adurable".options = [
           "compress=zstd:1"
           "discard"
         ];
