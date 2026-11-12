@@ -265,6 +265,12 @@ cost is that one slot that fills it starves the others. The size is the option
 `permafrost.slots.homeVolumeSizeMiB` and the mount point is `permafrost.slots.homeRoot`. Like
 `adurable-home.img` it is a disk volume and not a share, and the runner has no code for it.
 
+The one thing of a slot that is not on that volume is its `workspaces` directory. It is a
+directory of the host, `/var/lib/permafrost-workspaces/f-slotN`, shared by one virtiofs share
+(`factory_ws`) and bind mounted into the home of the slot. It is the first place where a file of
+the guest reaches the host disk and stays there after the guest stops. See
+[Workspaces share](reference.md#workspaces-share) for the ids, the modes and the reader.
+
 ### Why this shape
 
 **Why not tmpfs.** A tmpfs `/nix/.rw-store` (`size=20G`) plus a tmpfs `/home/agent`
@@ -326,6 +332,11 @@ Images live at `/var/lib/permafrost/permafrost/`, keyed on the guest's `hostName
    guest to one stale image set, but a guest *renamed or deleted from the module tree* leaves
    a directory nothing else will ever clean — the only unbounded source of orphans, since
    there is only one guest that could leave one behind.
+5. **The workspaces directory is outside all of this.** `/var/lib/permafrost-workspaces` is not
+   in the state directory, so `ExecStopPost` (`rm -rf` of the state directory) and
+   `permafrost-gc` (which deletes every directory below `/var/lib/permafrost/` that has no
+   active unit) never touch it. The runner makes the top two levels, as root, at each launch
+   and never recurses into what a slot wrote.
 
 ### Discovery
 
@@ -468,3 +479,27 @@ something else puts a key in `~agent/.ssh/authorized_keys`. `permafrost.gui` is 
 ignored by the fleet path for the reason given under GUI Passthrough above. The tap naming
 described under Network Architecture applies to both paths identically, since both build
 their tap from the same `permafrost.identity.tapId` option.
+
+Both paths also carry the **workspaces share** of the factory slots, with the same tag
+(`factory_ws`), the same mount point in the guest and the same virtiofsd flags (the id map of
+`modules/_lib/slots.nix`), and only the host half differs:
+
+```mermaid
+graph LR
+    SLOT["slot f-slotN<br/>uid 2000+N"] --> BIND["bind mount<br/>~/workspaces"]
+    BIND --> MNT["/mnt/factory/workspaces<br/>(root 0700 parent)"]
+    MNT -->|"virtiofs, uid map<br/>2000+N to 2000000000+N"| DIR["host directory<br/>/var/lib/permafrost-workspaces"]
+    DIR -->|"read-only bind,<br/>nosymfollow"| VIEW["/srv/permafrost-workspaces<br/>(group reader)"]
+    RUNNER["runner mode:<br/>install -d as root,<br/>safe_dir first"] -.-> DIR
+    FLEET["fleet mode:<br/>tmpfiles rules of<br/>host/workspaces.nix"] -.-> DIR
+```
+
+In runner mode the script makes the directories as root before the guest starts and runs one more
+virtiofsd; in fleet mode `host/workspaces.nix` makes them with `tmpfiles` and the share has
+`posixAcl = false` and `extraArgs`, because virtiofsd refuses the map together with ACLs. The
+directory is not in the state directory, so neither `ExecStopPost` nor `nix run .#gc` removes it.
+
+The option `permafrost.host.autostart` (default `false`, `host/fleet.nix`) makes the host start
+the fleet guest at boot. The fleet guest has no `launch` or `ssh_keys` share, so it cannot get a
+tailnet key, a dsh secret or the keys of an agent: a host that starts the guest with the runner
+does not use the option and needs a boot unit that starts the runner.

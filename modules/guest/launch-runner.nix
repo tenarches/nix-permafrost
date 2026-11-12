@@ -16,6 +16,7 @@
     }:
     let
       shareLib = import ../_lib/shares.nix;
+      slotLib = import ../_lib/slots.nix;
       cfg = config.permafrost;
       runtimeDir = "/run/microvm-${cfg.identity.name}";
     in
@@ -87,6 +88,18 @@
             socket = "${runtimeDir}/launch.sock";
           }
         ]
+        ++ lib.optional cfg.slots.workspaces.enable {
+          # The workspaces of the factory slots, on the host disk. The runner
+          # makes the directory behind it before the guest starts and runs the
+          # virtiofsd with the id map (_lib/slots.nix, virtiofsdArgs). The
+          # directory is not under the state directory, so nothing in it goes
+          # when the unit stops.
+          tag = slotLib.shareTag;
+          proto = "virtiofs";
+          source = "host-managed-virtiofsd-at-factory-ws";
+          mountPoint = slotLib.shareMount;
+          socket = "${runtimeDir}/${slotLib.shareTag}.sock";
+        }
         ++ map (s: {
           tag = shareLib.tag s;
           proto = "virtiofs";

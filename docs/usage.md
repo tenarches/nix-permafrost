@@ -187,6 +187,40 @@ To see what would be written without launching anything, `nix run .#ssh-config`.
 
 (That is the client config for reaching the guest. The agent user's own outbound SSH config *inside* the guest is separate — see `modules/guest/home/ssh.nix`.)
 
+### Network access from the shell
+
+A factory slot (`f-slot1` and so on, see [Slot accounts](reference.md#slot-accounts)) may reach
+the internal list, the declared resolvers, the LAN hosts of its profile and public hosts on
+ports 80 and 443. Anything else is rejected at once. A profile is changed while the guest runs
+with one ssh command, with a certificate whose principal is `netctl` (the Vault role that signs
+it is outside this repository):
+
+```bash
+ssh -i netctl-key netctl@permafrost list
+# ok list default=internet-only profiles=internet-only,lan-test
+ssh -i netctl-key netctl@permafrost set f-slot1 lan-test
+# ok set slot=f-slot1 uid=2001 from=internet-only to=lan-test killed=0
+ssh -i netctl-key netctl@permafrost get f-slot1
+# ok get slot=f-slot1 uid=2001 profile=lan-test
+```
+
+The grammar and the exit codes are in the [netctl protocol](reference.md#netctl-protocol). A
+reload of the table puts every slot back on the default profile.
+
+### Workspaces of the slots
+
+What a slot writes in `~/workspaces` is kept on the host, in
+`/var/lib/permafrost-workspaces/f-slotN`, and stays there after the guest stops. The rest of the
+slot's home is destroyed with the guest. The directory is made at launch (`nix run
+.#permafrost start`, as root) and is not removed by `stop` or by `nix run .#gc`. See
+[Workspaces share](reference.md#workspaces-share) for the owners, the reader and the limits.
+
+### Start the guest at boot
+
+`permafrost.host.autostart = true` on a host with `host-fleet` starts the guest with the host.
+That guest has no `launch` or `ssh_keys` share, so it joins no tailnet and takes no key from an
+agent. See [Autostart](reference.md#autostart).
+
 ### The forwarded agent, and what the guest may reach with it
 
 The guest holds no private key of its own. Outbound SSH — `git push`, Gitea — works off the agent socket forwarded in over your login, and on a TPM host that socket is `permafrost-agent.sock`, which carries the agentic key and nothing else. The isolation contract is that the guest never sees the personal key. Check it from the host:

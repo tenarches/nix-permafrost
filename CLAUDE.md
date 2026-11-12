@@ -118,6 +118,11 @@ Follow these on every task, every commit:
    The slot accounts have a VM check, which `nix flake check` runs without
    `--no-build`: `nix build .#checks.x86_64-linux.vm-slots -L`.
 
+   The workspaces share has four eval checks, `workspaces-flags`, `runner-guard`,
+   `workspaces-ids-agree` and `autostart-option`, which `nix flake check` builds,
+   and `scripts/mapping-smoke.sh`, which needs sudo and `/dev/kvm` and is run by
+   hand (it is not a flake check).
+
 6. **Honest uncertainty.** If you cannot confirm a change is behavior-preserving,
    stop and report. A blocked task accurately described is better than a silently
    broken configuration.

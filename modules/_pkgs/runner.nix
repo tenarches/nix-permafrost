@@ -13,10 +13,47 @@
 let
   inherit (pkgs) lib;
   shareLib = import ../_lib/shares.nix;
+  slotLib = import ../_lib/slots.nix;
 
   cfg = nixos.config.permafrost;
   inherit (cfg) identity;
   inherit (cfg) shares;
+  slotCfg = cfg.slots;
+  ws = slotCfg.workspaces;
+  wsPath = lib.escapeShellArg ws.hostPath;
+  readerGid = toString (slotLib.readerGid slotCfg);
+
+  # The virtiofsd line is inside the single-quoted LAUNCH_COMMAND below, so
+  # nothing that goes into it may hold a single quote.
+  wsFlags = lib.escapeShellArgs (slotLib.virtiofsdArgs slotCfg);
+  wsSocket = "$SOCKET_DIR/${slotLib.shareTag}.sock";
+  wsLine =
+    assert lib.assertMsg (
+      !lib.hasInfix "'" "${wsFlags}${ws.hostPath}"
+    ) "the workspaces flags or path hold a single quote";
+    ''${pkgs.virtiofsd}/bin/virtiofsd --socket-path "${wsSocket}" --shared-dir "${ws.hostPath}" --sandbox namespace ${wsFlags} &'';
+
+  # The host directories behind the workspaces share. The tree is made here, as
+  # root, before the guest starts: slot n owns `<hostPath>/<slot>` as the host
+  # id of the id map, and the reader group may enter it. Only these two levels
+  # are touched, never what is inside.
+  wsSetup = lib.concatStringsSep "\n" (
+    [
+      "safe_dir ${wsPath}"
+      "${pkgs.coreutils}/bin/install -d -m 0750 -o 0 -g ${readerGid} ${wsPath}"
+    ]
+    ++ lib.concatMap (
+      n:
+      let
+        dir = lib.escapeShellArg "${ws.hostPath}/${slotLib.name slotCfg n}";
+      in
+      [
+        "safe_dir ${dir}"
+        "${pkgs.coreutils}/bin/install -d -m 2750 -o ${toString (slotLib.hostUid slotCfg n)} -g ${readerGid} ${dir}"
+        "${pkgs.coreutils}/bin/chmod 2750 ${dir}"
+      ]
+    ) (lib.range 1 slotCfg.count)
+  );
 
   # Host-side home for this guest's ephemeral disk images. Must match stateDir in
   # modules/guest/base.nix, which keys it on the guest's name.
@@ -296,6 +333,10 @@ pkgs.writeShellScriptBin identity.name ''
     echo "Seeded the dsh browser-session secret; cookies will survive a relaunch."
   }
 
+  # 3e. Directories of the workspaces share.
+  #
+  ${slotLib.safeDir pkgs.coreutils}
+
   case "$COMMAND" in
     status)
       if systemctl is-active --quiet "$UNIT_NAME"; then
@@ -335,6 +376,7 @@ pkgs.writeShellScriptBin identity.name ''
       chmod 700 "$LAUNCH_DIR"
       issue_tailnet_key
       deliver_session_secret
+      ${lib.optionalString ws.enable wsSetup}
       ;;
     *)
       echo "Usage: $0 {run|start|stop|status}"
@@ -391,6 +433,7 @@ pkgs.writeShellScriptBin identity.name ''
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ro-store.sock" --shared-dir /nix/store --sandbox namespace &
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/ssh.sock" --shared-dir "'$SSH_KEYS_DIR'" --sandbox namespace &
     ${pkgs.virtiofsd}/bin/virtiofsd --socket-path "'$SOCKET_DIR'/launch.sock" --shared-dir "'$LAUNCH_DIR'" --sandbox namespace &
+    ${lib.optionalString ws.enable wsLine}
 
     ${lib.concatMapStringsSep "\n" (s: ''
       ${pkgs.coreutils}/bin/mkdir -p "$REAL_HOME/${s.host}"
@@ -402,6 +445,7 @@ pkgs.writeShellScriptBin identity.name ''
     while [ ! -S "$SOCKET_DIR/ro-store.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     while [ ! -S "$SOCKET_DIR/ssh.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
     while [ ! -S "$SOCKET_DIR/launch.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+    ${lib.optionalString ws.enable ''while [ ! -S "${wsSocket}" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''}
     ${lib.concatMapStringsSep "\n" (
       s: ''while [ ! -S "$SOCKET_DIR/${shareLib.tag s}.sock" ]; do ${pkgs.coreutils}/bin/sleep 0.1; done''
     ) shares}

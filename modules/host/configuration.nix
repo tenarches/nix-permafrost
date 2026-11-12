@@ -14,6 +14,7 @@
       config.flake.modules.nixos.host-bridge
       config.flake.modules.nixos.host-secrets
       config.flake.modules.nixos.host-fleet
+      config.flake.modules.nixos.host-workspaces
 
       inputs.microvm.nixosModules.host
 

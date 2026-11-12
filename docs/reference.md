@@ -97,7 +97,7 @@ login, `netctl`, runs one command and no shell. All are declared in `modules/gue
 |---|---|---|---|---|
 | `agent` | 1000 / `users` | `/home/agent`, the `home.img` volume | the shares under `/mnt/persist`, linked into its home | serial console, ssh with the launching user's keys, ssh with a CA certificate |
 | `adurable` | 1001 / 1001 (`adurable`) | `/home/adurable`, the `adurable-home.img` volume | nothing | ssh with a CA certificate only |
-| `f-slot1` to `f-slotN` | 2001 and up / the same number, group of the same name | `/home/slots/f-slotN`, on the `slots-home.img` volume | nothing | ssh with a CA certificate only |
+| `f-slot1` to `f-slotN` | 2001 and up / the same number, group of the same name | `/home/slots/f-slotN`, on the `slots-home.img` volume | the workspaces share only, at `/home/slots/f-slotN/workspaces` (see [Workspaces share](#workspaces-share)) | ssh with a CA certificate only |
 | `netctl` | 1002 / 1002 (`netctl`) | none (`/var/empty`) | nothing | ssh with a CA certificate only, one forced command |
 
 `agent` is the account of the owner's harnesses (`modules/harness/*.nix`). Their sign-in
@@ -140,6 +140,9 @@ guest cannot read each other's files. The options are under `permafrost.slots`:
 | `uidBase` | `2000` | Slot n has uid and gid `uidBase + n`. |
 | `homeRoot` | `/home/slots` | The mount point of the one volume that holds every slot home. |
 | `homeVolumeSizeMiB` | `131072` | The size of that volume. It is sparse, so this is a cap. |
+| `workspaces.enable` | `true` | Mount the workspaces share and bind each slot's part into its home. The launch module supplies the share. |
+| `workspaces.hostPath` | `/var/lib/permafrost-workspaces` | The host directory that the share carries. |
+| `workspaces.hostIdBase` | `2000000000` (1879048192 to 2147483000) | The host ids of the slots start here (see [Workspaces share](#workspaces-share)). |
 
 - **Login.** As for `adurable`: no key, no password (locked). `AuthorizedKeysFile none`,
   `AuthorizedPrincipalsFile none` and no forwarding of any kind (agent, TCP, stream-local,
@@ -153,7 +156,7 @@ guest cannot read each other's files. The options are under `permafrost.slots`:
 - **Home.** `/home/slots/f-slotN` is on `slots-home.img`, one volume for all slots, recreated
   on every boot. Each home is mode 0700, and `/home/slots` is 0711, so a slot can reach its
   own home and cannot list the others. `tmpfiles` creates `tmp` and `work` in it. Nothing a
-  slot writes there reaches the host.
+  slot writes there reaches the host, except what it writes in `workspaces` (below).
 - **TMPDIR.** `/tmp` is one shared volume. The `Match` block of each slot sets
   `TMPDIR=/home/slots/f-slotN/tmp`, so the commands of an ssh session do not put their files
   in `/tmp`. This is why the blocks are written one for each slot: `SetEnv` does not expand `%u`.
@@ -165,12 +168,17 @@ guest cannot read each other's files. The options are under `permafrost.slots`:
   (`devenv`, `uv`, `nodejs` and the Nix linters), as `adurable` does. This adds one
   `home-manager-f-slotN.service` for each slot at boot. The cost is not measured.
 - **Nix.** `nix.settings.allowed-users` lists the slots. `trusted-users` stays `root`.
+- **Workspaces.** `/home/slots/f-slotN/workspaces` is the part of the workspaces share that
+  belongs to the slot, bind mounted into its home. This is the one place where what a slot
+  writes reaches the host disk. See [Workspaces share](#workspaces-share).
 
 Not done: a slot can list the processes of the other accounts (see below). `/tmp` is shared,
 and only ssh sessions get the `TMPDIR` above. There is no CPU, memory or disk limit for a
 slot, and a slot that fills `slots-home.img` starves the others. Unix sockets (abstract ones
 too) and the Nix store are shared between all accounts. What a slot may reach over TCP and UDP
-is the subject of the next section.
+is the subject of the next section, and what a slot may leave on the host disk is the subject of
+[Workspaces share](#workspaces-share): guest root can change files that exist there, and only
+the read-only mount on the host stops the reader from writing.
 
 ### Network access
 
@@ -310,6 +318,147 @@ journal of `dsh-web`, which `adurable` cannot read (it is not in `systemd-journa
 Whether a loopback request without the cookie is refused is not verified. The tailscale
 daemon socket is also open to every account, with read-only status for any account that
 is not root.
+
+### Workspaces share
+
+The workspaces of the slots live on the host disk, so a host service can read them (D-126 and
+D-128 of pi-durable). One virtiofs share, tag `factory_ws`, carries the host directory
+`/var/lib/permafrost-workspaces` (`permafrost.slots.workspaces.hostPath`) into the guest at
+`/mnt/factory/workspaces`. The directory is not below `/var/lib/permafrost`, because
+`nix run .#gc` deletes every directory there that has no running unit, and the runner removes
+only `*.img` when the unit stops: nothing in the workspaces is removed by either. The
+function `modules/_lib/slots.nix` holds the names, the ids and the flags, so the guest, the
+runner, the fleet unit, the host module and the checks read one definition.
+
+Layout, and the path rule that pi-durable uses:
+
+| Where | Path |
+|---|---|
+| Host, written by the guest | `/var/lib/permafrost-workspaces/f-slotN/<repo>` |
+| Host, read by the reader | `/srv/permafrost-workspaces/f-slotN/<repo>` (read-only view of the line above) |
+| Guest, the slot | `/home/slots/f-slotN/workspaces/<repo>` |
+| Guest, root only | `/mnt/factory/workspaces/f-slotN/<repo>` |
+
+**Ids.** The slot `f-slotN` has uid and gid `2000 + N` in the guest and writes as host uid and
+gid `2000000000 + N` (`permafrost.slots.workspaces.hostIdBase`). The range is above the
+container ids of systemd (`0x70000000`) and below 2^31, so no account of a host has one of
+those numbers, and no real host user owns a file of a slot. The map is made by virtiofsd
+(`--translate-uid` and `--translate-gid`, no user namespace): three rules for the uid and the
+same three for the gid, as written by `virtiofsdArgs`:
+
+| Flag value | Meaning |
+|---|---|
+| `map:2001:2000000001:16` | Guest ids 2001 to 2016 are host ids 2000000001 to 2000000016, both ways. |
+| `forbid-guest:0:2001` | A guest id from 0 to 2000 cannot create a file or take a file as owner. |
+| `forbid-guest:2017:4294965278` | The same for every id above the slot range. |
+
+Only slots create files in the share. Guest root, `agent`, `adurable` and `netctl` cannot create
+a file or `chown` one into a foreign id, so a file of the guest root never lands on the host.
+`--posix-acl` cannot be used with the map, so the fleet share has `posixAcl = false` and there
+are no ACLs or xattrs in the share. Ids outside the map show unchanged, so a host file owned by
+a real uid from 2001 to 2016 would show in the guest as a slot's file. Nothing like it exists
+unless a host user puts it there, and the audit unit (below) finds it.
+
+**Modes.** `<hostPath>` is `root:2000000000 0750`. Each `<hostPath>/f-slotN` is
+`2000000000+N:2000000000 2750` (setgid), so a file a slot makes gets the group `2000000000`,
+and the umask of a slot (0027) makes it 0640 and a directory 0750. The group `2000000000` is
+the reader group. No account of the guest has it.
+
+**Who sees what in the guest.** `/mnt/factory` is `root 0700`, so a slot cannot reach the share
+root or any other slot's directory. The slot sees only its own part, bind mounted at
+`<home>/workspaces`, inside its 0700 home. A slot that opens its own directory with `chmod`
+still hides it behind those two. The share and the bind mounts are `nosuid,nodev` and have no
+`nosymfollow`: a symlink in a workspace works for the slot (`node_modules/.bin`, the `result`
+link of `nix build`, worktrees). The unit `permafrost-factory-guard.service` runs before sshd
+and fails unless `/mnt/factory` is `700 0 0`, so a failed `tmpfiles` run leaves the guest with
+no login and not with an open share.
+
+**Two launch paths, one set of flags.**
+
+| Path | Host directory made by | virtiofsd |
+|---|---|---|
+| Runner (`nix run .#permafrost start`) | the runner, as root, before the guest starts: `install -d -m 2750 -o <hostUid> -g <readerGid>` for each slot, then `chmod 2750`. The shell function `safe_dir` runs before every `install` and stops the launch if the path is a symlink or not a directory. No `chown -R`, no `chmod -R`. | One more virtiofsd in the runner, `--sandbox namespace`, with the flags above. Socket `factory_ws.sock` in `/run/microvm-<name>/`. |
+| Fleet (`microvm.vms.permafrost`) | `systemd.tmpfiles.rules` of `host/workspaces.nix` | The share of `launch-fleet.nix`: `posixAcl = false` and `extraArgs` with the flags. |
+
+The checks `workspaces-flags`, `runner-guard` and `workspaces-ids-agree` pin this text. The
+script `scripts/mapping-smoke.sh` runs the real flags against a throwaway virtiofsd and guest
+(see below).
+
+**The host module** `modules/host/workspaces.nix` (`flake.modules.nixos.host-workspaces`,
+imported by `permafrost-host`) is for a host that holds the share. The options are under
+`permafrost.host.workspaces`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `path` | `/var/lib/permafrost-workspaces` | The directory of the share. |
+| `readerPath` | `/srv/permafrost-workspaces` | Where the reader sees it. |
+| `readerGroup` | `permafrost-ws` | The group of the reader. Its gid is `hostIdBase`. |
+| `hostIdBase` | `2000000000` | As in the guest. |
+| `count` | `16` | The number of slot directories. |
+| `userPrefix` | `f-slot` | The start of the slot directory names. |
+
+The defaults come from the same block in `_lib/slots.nix` as the guest options. When the host
+evaluates the guest (`host-fleet`), `count`, `userPrefix`, `path` and `hostIdBase` are taken from
+it with `mkDefault`. A host that starts the guest with the runner has no guest in its own
+configuration, so the check `workspaces-ids-agree` compares the two sets of defaults.
+
+- **Read-only view.** `fileSystems.<readerPath>` binds `path` with `bind,ro,nosymfollow,nosuid,nodev`.
+  **This mount is the only write barrier.** A slot owns its tree and can `chmod -R g+w` it,
+  which gives the reader group write bits; the read-only mount is what stops the write. So
+  the group has one kind of member, the service that reads the workspaces, and that service
+  reaches the data only through `readerPath` (`BindReadOnlyPaths` and `InaccessiblePaths = [ path ]`
+  in its unit). The unit `permafrost-workspaces-ro-check.service` fails when `findmnt` does not
+  show `ro`, `nosymfollow` and `nosuid`, and the unit of the reader orders itself after it.
+- **Audit.** `permafrost-workspaces-audit.service` runs daily (and can be started by hand),
+  tag `permafrost-ws-audit`. It writes one warning for each file whose owner is outside
+  `hostIdBase+1` to `hostIdBase+count`, or whose group is outside `hostIdBase` to
+  `hostIdBase+count`, and a last line `found <n>`. It changes nothing. File names are passed through
+  `tr`, so a name cannot start a log line.
+- **Reader unit (not in this repository).** `services.nix-skills-mcp.readOnlyPaths = [ "/srv/permafrost-workspaces" ]`
+  and `SupplementaryGroups = [ "permafrost-ws" ]` belong to the host configuration. git can
+  refuse a repository there with "dubious ownership", because the owner is a number that the
+  service user does not have. The service needs `safe.directory = *`, for example
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=*`.
+- **Quota.** The share has no quota. On a host with ZFS the path should be its own dataset
+  with `quota`.
+
+Not done: guest root can still change, truncate, rename and `chmod` a file that exists in the
+share, because virtiofsd acts with its own rights once the guest kernel has allowed the call.
+Guest root already owns the data of every slot in the guest, so it is inside the trust
+boundary for it. A setuid bit that guest root sets is inert for the reader (`nosuid`).
+A slot can `chmod 700` its tree and hide it from the reader: the reader then fails and reads
+nothing wrong. The reader mount does not follow symlinks, so `nix_verify` cannot follow a
+symlink inside a repository. A credential in a workspace is readable by the reader, so no
+credential belongs there. The virtiofsd of the share runs as root, with `--sandbox namespace`
+as its own isolation: a bug in virtiofsd or in the id map is a host-facing surface. The shape
+that virtiofsd runs unprivileged is not done. Setgid inheritance and the id map were not run
+against the real guest (see `scripts/mapping-smoke.sh`).
+
+#### The mapping smoke test
+
+`scripts/mapping-smoke.sh` runs by hand and is not a flake check. It needs `sudo` (virtiofsd
+runs as root, as it does for the guest) and `/dev/kvm`. It starts one virtiofsd on a `mktemp`
+directory with the real flags (printed by `nix eval` from `_lib/slots.nix`), boots a minimal
+initrd with qemu (no root file system, no disk, no network, none of the guest's state
+directory), and makes files as guest uid 2001 and as guest root. Then it prints the owner,
+group and mode of the host tree and `smoke ok` when they match: slot files `2000000001:2000000000`
+with `640` and `2750`, no file made by root, `chown` to 0 or outside the slot range refused,
+`chown` to another slot allowed. `SANDBOX=chroot` runs the same with another virtiofsd sandbox.
+If `--translate-uid` and `--sandbox namespace` do not work together, the creates fail, and the
+flag is the thing to change (record it in D-128).
+
+### Autostart
+
+`permafrost.host.autostart` (`modules/host/fleet.nix`, default `false`) sets
+`microvm.vms.permafrost.autostart`, so the host wants `microvm@permafrost.service` at boot. It
+exists only on a host with `host-fleet`.
+
+The guest of that path has no `launch` share (no tailnet key, no dsh secret) and no `ssh_keys`
+share, because only the runner can fill them (see `launch-fleet.nix`). Starting the guest
+through `host-fleet` therefore changes what the guest can do. A host that starts the guest with
+the runner (`sudo nix run .#permafrost start`) has no use for the option. It needs a boot unit
+that starts the runner instead, and the runner needs `SUDO_USER` for the agent socket and for
+minting the keys. The check `autostart-option` evaluates the host with the option off and on.
 
 ## Secret Injection Architecture — as designed, not as built
 

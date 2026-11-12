@@ -11,6 +11,10 @@ pointed at the LAN MCP gateway, and Playwright. There is one runner, one address
 one ssh alias — see [Harness Modules](#harness-modules) for why adding a new agent
 means adding one file.
 
+Besides `agent`, the guest has `adurable` and one account for each factory slot (`f-slot1` to
+`f-slot16`), which are where pi-durable runs untrusted commands. A slot reaches the host only through
+its `workspaces` directory. See [Guest accounts](docs/reference.md#guest-accounts).
+
 ---
 
 ## Quick Start

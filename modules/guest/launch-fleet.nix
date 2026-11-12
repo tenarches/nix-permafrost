@@ -12,9 +12,10 @@
   # so a fleet-started guest is reachable only over the serial console unless
   # something else puts a key in ~agent/.ssh/authorized_keys.
   flake.modules.nixos.launch-fleet =
-    { config, ... }:
+    { config, lib, ... }:
     let
       shareLib = import ../_lib/shares.nix;
+      slotLib = import ../_lib/slots.nix;
       cfg = config.permafrost;
     in
     {
@@ -26,6 +27,17 @@
           mountPoint = "/nix/.ro-store";
         }
       ]
+      ++ lib.optional cfg.slots.workspaces.enable {
+        # The workspaces of the factory slots. The host creates the directories
+        # (host/workspaces.nix). posixAcl is off because virtiofsd refuses it
+        # together with the id map, and microvm.nix asserts the same.
+        tag = slotLib.shareTag;
+        proto = "virtiofs";
+        source = cfg.slots.workspaces.hostPath;
+        mountPoint = slotLib.shareMount;
+        posixAcl = false;
+        extraArgs = slotLib.virtiofsdArgs cfg.slots;
+      }
       ++ map (s: {
         tag = shareLib.tag s;
         proto = "virtiofs";

@@ -1,5 +1,7 @@
 # VM check of the factory slot accounts (guest/slots.nix) next to adurable, of
-# the egress table (guest/network-egress.nix) and of netctl (guest/netctl.nix).
+# the egress table (guest/network-egress.nix), of netctl (guest/netctl.nix) and
+# of the workspaces share, from both ends: the bind mounts in the guest, and the
+# read-only view of the host module (host/workspaces.nix) on `lan`.
 #
 # Three nodes: `guest` carries the modules under test. `site` is the ssh client,
 # signs the certificates, and counts as the internet: 203.0.113.0/24 is
@@ -19,6 +21,13 @@ let
   lanIp = "10.99.0.10";
   lanIp6 = "fd00:99::10";
   internalIp = "10.99.0.20";
+
+  slotLib = import ../_lib/slots.nix;
+  slotCount = 3;
+  hostIdBase = slotLib.defaults.hostIdBase;
+
+  # The function that guards the host tree in the runner, as the runner has it.
+  safeDir = pkgs.writeText "safe-dir.sh" (slotLib.safeDir pkgs.coreutils);
 
   # What a client connects to. One line out: `ok` or `err <errno> <seconds>`.
   probe = pkgs.writers.writePython3Bin "probe" { flakeIgnore = [ "E501" ]; } ''
@@ -146,7 +155,12 @@ pkgs.testers.runNixOSTest {
 
   nodes = {
     guest =
-      { lib, ... }:
+      {
+        config,
+        lib,
+        utils,
+        ...
+      }:
       {
         imports = [
           nixosModules.guest-slots
@@ -190,8 +204,49 @@ pkgs.testers.runNixOSTest {
         # Nothing to fetch from a cache in this network.
         nix.settings.substituters = lib.mkForce [ ];
 
+        # Stands for the virtiofs share. A tmpfs, so the bind mounts and the
+        # modes are the real ones; the id map is not tested here (a tmpfs has no
+        # virtiofsd), scripts/mapping-smoke.sh does that. The directories are
+        # made before the bind mounts, as the host makes them before the guest
+        # starts, with the owner and group that the guest sees there: the slot,
+        # and the group of the reader.
+        #
+        # The nodes of a VM check replace `fileSystems` with
+        # `virtualisation.fileSystems`, so the mounts of the module are put
+        # there by the same function that the module uses.
+        virtualisation.fileSystems = lib.mkMerge [
+          (slotLib.workspaceMounts config.permafrost.slots)
+          {
+            ${slotLib.shareMount} = {
+              device = "tmpfs";
+              fsType = "tmpfs";
+              options = [ "mode=0755" ];
+            };
+          }
+        ];
+        systemd.services.workspaces-standin = {
+          wantedBy = [ "local-fs.target" ];
+          before = [
+            "local-fs.target"
+          ]
+          ++ map (n: "${utils.escapeSystemdPath "/home/slots/f-slot${toString n}/workspaces"}.mount") (
+            lib.range 1 slotCount
+          );
+          unitConfig = {
+            DefaultDependencies = false;
+            RequiresMountsFor = slotLib.shareMount;
+          };
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = lib.concatMapStrings (n: ''
+            install -d -m 2750 -o ${toString (2000 + n)} -g ${toString hostIdBase} ${slotLib.shareMount}/f-slot${toString n}
+          '') (lib.range 1 slotCount);
+        };
+
         permafrost = {
-          slots.count = 3;
+          slots.count = slotCount;
           ssh.trustedUserCAKeys = "${keys}/ca.pub";
           network = {
             resolvers = [ internalIp ];
@@ -272,8 +327,23 @@ pkgs.testers.runNixOSTest {
       };
 
     lan =
-      { lib, ... }:
+      { config, lib, ... }:
       {
+        # The host of the workspaces: the module of a real host, with the
+        # accounts that the tests act as.
+        imports = [ nixosModules.host-workspaces ];
+        permafrost.host.workspaces.count = slotCount;
+        # The nodes of a VM check replace `fileSystems`, so the read-only view
+        # is put in `virtualisation.fileSystems` by the function of the module.
+        virtualisation.fileSystems = slotLib.readerMount config.permafrost.host.workspaces;
+        users.users = {
+          outsider.isNormalUser = true;
+          reader = {
+            isNormalUser = true;
+            extraGroups = [ "permafrost-ws" ];
+          };
+        };
+
         virtualisation.vlans = [ 2 ];
         networking = {
           useDHCP = false;
@@ -470,6 +540,46 @@ pkgs.testers.runNixOSTest {
         # A slot has no way to the Nix daemon of root and no sudo.
         site.fail(ssh("f-slot1", "f-slot1", "type sudo"))
         site.succeed(ssh("f-slot1", "f-slot1", "grep -q '^CapEff:.0000000000000000$' /proc/self/status"))
+
+    with subtest("each slot has its own workspaces, behind a directory that only root enters"):
+        assert guest.succeed("stat -c '%a %u %g' ${slotLib.shareRoot}").strip() == "700 0 0"
+        guest.succeed("systemctl is-active permafrost-factory-guard.service")
+        for n in ["f-slot1", "f-slot2", "f-slot3"]:
+            opts = guest.succeed(f"findmnt -n -o OPTIONS /home/slots/{n}/workspaces").strip().splitlines()[-1]
+            assert "nosuid" in opts and "nodev" in opts, opts
+            # A link in a workspace has to work for its slot: no nosymfollow.
+            assert "nosymfollow" not in opts, opts
+        # The directory shows the owner and group that the host gives it.
+        assert guest.succeed("stat -c '%u %g %a' /home/slots/f-slot1/workspaces").strip() == "2001 ${toString hostIdBase} 2750"
+        site.succeed(
+            ssh(
+                "f-slot1",
+                "f-slot1",
+                "cd ~/workspaces && mkdir -p repo/.bin && echo mine > repo/file && ln -s file repo/link "
+                "&& printf '#!/bin/sh\\necho ran\\n' > repo/tool && chmod +x repo/tool && ln -s ../tool repo/.bin/x",
+            )
+        )
+        assert site.succeed(ssh("f-slot1", "f-slot1", "cat ~/workspaces/repo/link")).strip() == "mine"
+        assert site.succeed(ssh("f-slot1", "f-slot1", "~/workspaces/repo/.bin/x")).strip() == "ran"
+        # What the slot makes gets the mode of its umask and the group of the
+        # setgid directory, which is what the host reader needs.
+        assert guest.succeed("stat -c '%a %g' /home/slots/f-slot1/workspaces/repo/file").strip() == "640 ${toString hostIdBase}"
+        site.succeed(ssh("f-slot2", "f-slot2", "echo two > ~/workspaces/two"))
+        # Nobody else gets in: not a peer slot, not adurable, not even the slot
+        # itself above its own home.
+        for who in ["f-slot2", "adurable"]:
+            site.fail(ssh(who, who, "cat /home/slots/f-slot1/workspaces/repo/file"))
+            site.fail(ssh(who, who, "ls /home/slots/f-slot1/workspaces"))
+            site.fail(ssh(who, who, "ls ${slotLib.shareRoot}"))
+            site.fail(ssh(who, who, "ls ${slotLib.shareMount}"))
+            site.fail(ssh(who, who, "cat ${slotLib.shareMount}/f-slot1/repo/file"))
+        site.fail(ssh("f-slot1", "f-slot1", "ls ${slotLib.shareRoot}"))
+        site.fail(ssh("f-slot1", "f-slot1", "cat /home/slots/f-slot2/workspaces/two"))
+        site.fail(ssh("f-slot1", "f-slot1", "cat ${slotLib.shareMount}/f-slot2/two"))
+        # A slot that opens its own directory to everybody still hides it.
+        site.succeed(ssh("f-slot1", "f-slot1", "chmod 777 ~/workspaces"))
+        site.fail(ssh("f-slot2", "f-slot2", "cat /home/slots/f-slot1/workspaces/repo/file"))
+        site.fail(ssh("f-slot2", "f-slot2", "cat ${slotLib.shareMount}/f-slot1/repo/file"))
 
     # --- Network access ------------------------------------------------------
 
@@ -734,5 +844,144 @@ pkgs.testers.runNixOSTest {
         assert table() == before
         # The netctl login itself cannot write the sets either.
         guest.fail("su -s ${pkgs.runtimeShell} netctl -c 'nft list ruleset'")
+
+    # --- Workspaces on the host ---------------------------------------------
+
+    # The identity of a service that reads the workspaces, as the unit of the
+    # reader has it: a dynamic user, the group of the reader, the read-only
+    # view and nothing of the real directory.
+    READER = (
+        "systemd-run --quiet --wait --pipe --collect -p DynamicUser=yes "
+        "-p SupplementaryGroups=permafrost-ws -p Environment=PATH=/run/current-system/sw/bin "
+        "-p BindReadOnlyPaths=/srv/permafrost-workspaces "
+        "-p InaccessiblePaths=/var/lib/permafrost-workspaces "
+    )
+    TREE = "/var/lib/permafrost-workspaces"
+    VIEW = "/srv/permafrost-workspaces"
+
+
+    def reader(cmd):
+        return READER + "sh -c " + shlex.quote(cmd)
+
+
+    with subtest("the host tree has the owners and modes of the module"):
+        lan.wait_for_unit("permafrost-workspaces-ro-check.service")
+        assert lan.succeed(f"stat -c '%a %u %g' {TREE}").strip() == "750 0 ${toString hostIdBase}"
+        for n in [1, 2, 3]:
+            assert lan.succeed(f"stat -c '%a %u %g' {TREE}/f-slot{n}").strip() == f"2750 {${toString hostIdBase} + n} ${toString hostIdBase}"
+        assert lan.succeed("getent group permafrost-ws").startswith("permafrost-ws:x:${toString hostIdBase}:")
+        # The numbers belong to no account.
+        lan.fail("getent passwd ${toString (hostIdBase + 1)}")
+
+    with subtest("the reader reads what a slot wrote and cannot write it"):
+        # What a slot makes through the id map: an owner without a passwd
+        # entry, the group of the reader, mode 0640 and 2750.
+        lan.succeed(
+            f"install -d -m 2750 -o {${toString hostIdBase} + 1} -g ${toString hostIdBase} {TREE}/f-slot1/repo",
+            f"install -m 0640 -o {${toString hostIdBase} + 1} -g ${toString hostIdBase} /dev/null {TREE}/f-slot1/repo/file",
+            f"echo hello > {TREE}/f-slot1/repo/file",
+        )
+        opts = lan.succeed(f"findmnt -n -o OPTIONS --mountpoint {VIEW}").strip().splitlines()[-1].split(",")
+        for need in ["ro", "nosymfollow", "nosuid", "nodev"]:
+            assert need in opts, (need, opts)
+        assert lan.succeed(reader(f"cat {VIEW}/f-slot1/repo/file")).strip() == "hello"
+        assert lan.succeed(reader(f"ls {VIEW}/f-slot1/repo")).strip() == "file"
+        # The real directory is not there for the reader at all.
+        lan.fail(reader(f"ls {TREE}"))
+        for cmd in [
+            f"echo x >> {VIEW}/f-slot1/repo/file",
+            f"touch {VIEW}/f-slot1/repo/new",
+            f"rm -f {VIEW}/f-slot1/repo/file",
+            f"chmod 777 {VIEW}/f-slot1/repo/file",
+        ]:
+            status, out = lan.execute(reader(cmd) + " 2>&1")
+            assert status != 0, cmd
+        status, out = lan.execute(reader(f"touch {VIEW}/f-slot1/repo/new") + " 2>&1")
+        assert "Read-only file system" in out, out
+        assert lan.succeed(f"cat {TREE}/f-slot1/repo/file").strip() == "hello"
+        # An account outside the group does not even list the tree.
+        lan.fail(f"runuser -u outsider -- ls {TREE}")
+        lan.fail(f"runuser -u outsider -- ls {VIEW}")
+
+    with subtest("the mount, and not the mode, is the barrier"):
+        # A slot owns its tree and can give the group of the reader write bits.
+        lan.succeed(f"chmod -R g+w {TREE}/f-slot1")
+        # Through the real directory the group can now write. This is why the
+        # reader must never see that path.
+        lan.succeed(f"runuser -u reader -- touch {TREE}/f-slot1/repo/by-group")
+        lan.succeed(f"rm {TREE}/f-slot1/repo/by-group")
+        for cmd in [
+            f"echo x >> {VIEW}/f-slot1/repo/file",
+            f"touch {VIEW}/f-slot1/repo/new",
+            f"rm -f {VIEW}/f-slot1/repo/file",
+            f"mkdir {VIEW}/f-slot1/repo/dir",
+        ]:
+            status, out = lan.execute(reader(cmd) + " 2>&1")
+            assert status != 0 and "Read-only file system" in out, (cmd, out)
+        assert lan.succeed(f"cat {TREE}/f-slot1/repo/file").strip() == "hello"
+        # The unit that watches the mount fails when it is writable.
+        lan.succeed("systemctl is-active permafrost-workspaces-ro-check.service")
+        lan.succeed(f"mount -o remount,bind,rw {VIEW}")
+        lan.fail("systemctl restart permafrost-workspaces-ro-check.service")
+        lan.succeed(f"umount {VIEW} && mount {VIEW}")
+        lan.succeed("systemctl restart permafrost-workspaces-ro-check.service")
+        status, out = lan.execute(reader(f"touch {VIEW}/f-slot1/repo/new") + " 2>&1")
+        assert status != 0 and "Read-only file system" in out, out
+
+    with subtest("the reader does not follow a link that a slot made"):
+        # Made as a slot would make it, so it has the owner of a slot.
+        lan.succeed(f"ln -s /etc/passwd {TREE}/f-slot1/repo/link")
+        lan.succeed(f"chown -h {${toString hostIdBase} + 1}:${toString hostIdBase} {TREE}/f-slot1/repo/link")
+        lan.succeed(f"cat {TREE}/f-slot1/repo/link")
+        lan.fail(reader(f"cat {VIEW}/f-slot1/repo/link"))
+        assert lan.succeed(reader(f"readlink {VIEW}/f-slot1/repo/link")).strip() == "/etc/passwd"
+
+    with subtest("the audit finds a file that no slot owns"):
+        lan.succeed("systemctl start permafrost-workspaces-audit.service")
+        journal = lan.succeed("journalctl -t permafrost-ws-audit --no-pager")
+        assert "owner outside the slot ids" not in journal, journal
+        assert "found 0" in journal, journal
+        # A real account of the host in the share, and a file name that tries
+        # to start a line of its own in the journal. The second file belongs to
+        # root, so it is a finding too.
+        lan.succeed(f"chown 2001:2001 {TREE}/f-slot1/repo/file")
+        lan.succeed(f"touch \"{TREE}/f-slot1/repo/a\nFORGED-LINE\"")
+        lan.succeed("systemctl start permafrost-workspaces-audit.service")
+        journal = lan.succeed("journalctl -t permafrost-ws-audit --no-pager")
+        assert "owner outside the slot ids: 2001:2001 " + TREE + "/f-slot1/repo/file" in journal, journal
+        assert "owner outside the slot ids: 0:${toString hostIdBase} " + TREE + "/f-slot1/repo/a?FORGED-LINE" in journal, journal
+        assert "]: FORGED-LINE" not in journal, journal
+        assert "found 2" in journal, journal
+        lan.succeed(f"chown {${toString hostIdBase} + 1}:${toString hostIdBase} {TREE}/f-slot1/repo/file")
+        lan.succeed(f"find {TREE}/f-slot1/repo -name 'a*' -delete")
+
+    with subtest("the guard of the runner refuses a symlink and leaves what it points at"):
+        lan.succeed(
+            "mkdir /root/sentinel",
+            "install -m 0600 -o 1234 -g 1234 /dev/null /root/sentinel/file",
+            f"rm -r {TREE}/f-slot2 && ln -s /root/sentinel {TREE}/f-slot2",
+        )
+        before = lan.succeed("stat -c '%a %u %g' /root/sentinel /root/sentinel/file")
+        # The first is what the runner does for a good directory, the second
+        # for the link.
+        lan.succeed(f"bash -c '. ${safeDir}; safe_dir {TREE}/f-slot1'")
+        lan.succeed(f"bash -c '. ${safeDir}; safe_dir {TREE}/f-nothing'")
+        status, out = lan.execute(f"bash -c 'set -e; . ${safeDir}; safe_dir {TREE}/f-slot2; echo not-reached' 2>&1")
+        assert status == 1 and "is a symlink" in out and "not-reached" not in out, (status, out)
+        assert lan.succeed("stat -c '%a %u %g' /root/sentinel /root/sentinel/file") == before
+        # A file where a directory belongs is refused too.
+        lan.succeed(f"touch {TREE}/afile")
+        status, out = lan.execute(f"bash -c 'set -e; . ${safeDir}; safe_dir {TREE}/afile' 2>&1")
+        assert status == 1 and "is not a directory" in out, (status, out)
+
+    with subtest("sshd waits for the guard, and the guard fails while the share root is open"):
+        guest.succeed("chmod 755 ${slotLib.shareRoot}")
+        guest.fail("systemctl restart permafrost-factory-guard.service")
+        assert guest.fail("systemctl is-active sshd.service").strip() != "active"
+        guest.succeed("chmod 700 ${slotLib.shareRoot}")
+        guest.succeed("systemctl restart permafrost-factory-guard.service")
+        guest.succeed("systemctl start sshd.service")
+        guest.wait_for_unit("sshd.service")
+        assert site.succeed(ssh("f-slot1", "f-slot1", "id -un")).strip() == "f-slot1"
   '';
 }
