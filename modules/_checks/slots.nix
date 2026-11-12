@@ -89,6 +89,31 @@ let
             s.sendto(data, peer)
   '';
 
+  # A UDP sender that never stops, for the narrowing test: the table closes TCP
+  # at a change of profile and cannot close this.
+  spray = pkgs.writers.writePython3Bin "spray" { flakeIgnore = [ "E501" ]; } ''
+    import socket
+    import sys
+    import time
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    while True:
+        try:
+            s.sendto(b"x", (sys.argv[1], int(sys.argv[2])))
+        except OSError:
+            pass
+        time.sleep(0.2)
+  '';
+
+  # Many empty files in the current directory, so that a wipe takes a while.
+  manyFiles = pkgs.writers.writePython3Bin "many-files" { flakeIgnore = [ "E501" ]; } ''
+    import os
+    import sys
+
+    for i in range(int(sys.argv[1])):
+        os.close(os.open(str(i), os.O_CREAT | os.O_WRONLY))
+  '';
+
   webRoot = pkgs.writeTextDir "x" "hello\n";
 
   # A listener on every address of the node, one service for each port.
@@ -168,6 +193,8 @@ pkgs.testers.runNixOSTest {
           nixosModules.guest-ssh-ca
           nixosModules.guest-network-egress
           nixosModules.guest-netctl
+          nixosModules.guest-slotctl
+          nixosModules.guest-blocked-reader
         ];
 
         virtualisation = {
@@ -201,6 +228,11 @@ pkgs.testers.runNixOSTest {
         # script starts are on ports that the internet rule opens.
         boot.kernel.sysctl."net.ipv4.ip_unprivileged_port_start" = 0;
 
+        # The slot homes are on one btrfs volume as in the real guest
+        # (guest/base.nix), so that the wipe meets a nested subvolume.
+        boot.supportedFilesystems = [ "btrfs" ];
+        virtualisation.emptyDiskImages = [ 512 ];
+
         # Nothing to fetch from a cache in this network.
         nix.settings.substituters = lib.mkForce [ ];
 
@@ -217,6 +249,12 @@ pkgs.testers.runNixOSTest {
         virtualisation.fileSystems = lib.mkMerge [
           (slotLib.workspaceMounts config.permafrost.slots)
           {
+            ${config.permafrost.slots.homeRoot} = {
+              device = "/dev/vdb";
+              fsType = "btrfs";
+              autoFormat = true;
+            };
+
             ${slotLib.shareMount} = {
               device = "tmpfs";
               fsType = "tmpfs";
@@ -269,10 +307,14 @@ pkgs.testers.runNixOSTest {
         environment.systemPackages = [
           probe
           hold
+          spray
+          manyFiles
           pkgs.socat
           pkgs.curl
           pkgs.bash
           pkgs.python3
+          pkgs.btrfs-progs
+          pkgs.util-linux
         ];
 
         # What guest/base.nix sets and the node does not import.
@@ -910,6 +952,324 @@ pkgs.testers.runNixOSTest {
         # The netctl login itself cannot write the sets either.
         guest.fail("su -s ${pkgs.runtimeShell} netctl -c 'nft list ruleset'")
 
+    # --- describe, digest, stopjobs, blocked, wipe -----------------------------
+
+    def describe():
+        status, out = netctl("describe")
+        assert status == 0 and out.startswith("ok describe ") and len(out.strip().splitlines()) == 1, (status, out)
+        return json.loads(out.strip()[len("ok describe "):])
+
+
+    with subtest("describe says the protocol, the verbs and the profiles with their digests"):
+        d = describe()
+        assert d["proto"] == 2 and d["default"] == "internet-only", d
+        assert d["verbs"] == ["list", "describe", "get", "set", "restore", "wipe", "stopjobs", "blocked"], d["verbs"]
+        by = {p["name"]: p for p in d["profiles"]}
+        assert sorted(by) == ["internet-only", "lan-test"], by
+        assert by["lan-test"]["title"] == "LAN test", by
+        assert by["lan-test"]["lan"] == [{"address": "${lanIp}", "ports": [8080]}], by
+        assert by["lan-test"]["internet"] == {"enable": True, "tcpPorts": [80, 443]}, by
+        assert by["internet-only"]["lan"] == [], by
+        for p in by.values():
+            assert len(p["digest"]) == 16 and all(c in "0123456789abcdef" for c in p["digest"]), p
+        assert by["lan-test"]["digest"] != by["internet-only"]["digest"]
+        # The digest is of what the profile opens, so a second `describe` agrees.
+        assert describe() == d
+
+    with subtest("set with a digest applies only when the digest is the build's"):
+        d = describe()
+        digest = {p["name"]: p["digest"] for p in d["profiles"]}
+        before = table()
+        for wrong in [digest["internet-only"], "0" * 16]:
+            status, out = netctl(f"set f-slot1 lan-test {wrong}")
+            assert status == 9 and out.strip() == "err 9 changed", (status, out)
+            assert table() == before
+        assert netctl("get f-slot1")[1].strip() == "ok get slot=f-slot1 uid=2001 profile=internet-only"
+        # A digest that is not 16 hex digits is outside the grammar.
+        for odd in ["0" * 15, "0" * 17, "ABCDEF0123456789", "lan-test"]:
+            status, out = netctl(f"set f-slot1 lan-test {odd}")
+            assert status == 2, (odd, status, out)
+        assert table() == before
+        # The slot is checked before the digest.
+        assert netctl(f"set f-slot9 lan-test {digest['lan-test']}")[0] == 3
+        status, out = netctl(f"set f-slot1 lan-test {digest['lan-test']}")
+        assert status == 0 and "from=internet-only to=lan-test" in out, (status, out)
+        assert members("uids_lan_test") == [2001]
+        # The same profile with the right digest changes nothing and is ok.
+        status, out = netctl(f"set f-slot1 lan-test {digest['lan-test']}")
+        assert status == 0 and out.strip().endswith("unchanged"), out
+        assert netctl(f"set f-slot1 internet-only {digest['internet-only']}")[0] == 0
+        assert members("uids_lan_test") == []
+
+    def uid_pids(uid):
+        return guest.succeed(f"pgrep -u {uid} || true").split()
+
+
+    def stable_pids(uid):
+        # The ssh session of the start ends a moment after it returns.
+        seen = []
+        for _ in range(20):
+            now = sorted(uid_pids(uid))
+            if now and now == seen:
+                return now
+            seen = now
+            guest.succeed("sleep 0.5")
+        raise AssertionError(("processes of the uid do not settle", uid, seen))
+
+
+    with subtest("narrowing stops what runs: set, then stopjobs, leave no process of the slot"):
+        slot, uid = "f-slot1", 2001
+        assert netctl("set f-slot1 lan-test")[0] == 0
+        # A daemon of its own session, and a UDP sender to an address that the
+        # narrow profile refuses (the LAN host on a port that nobody serves).
+        site.succeed(ssh(slot, slot, "setsid -f sleep 3000 < /dev/null > /dev/null 2>&1"))
+        site.succeed(ssh(slot, slot, "setsid -f spray ${lanIp} 9999 < /dev/null > /dev/null 2>&1"))
+        before = stable_pids(uid)
+        assert len(before) >= 3, before
+        assert netctl("set f-slot1 internet-only")[0] == 0
+        # `set` closes TCP and moves the uid. The UDP sender and the daemon are
+        # still there: this is what stopjobs is for. It is also the control of the
+        # assertion below: it can see a process that is left.
+        assert uid_pids(uid), "the narrow alone stopped the processes, so this test shows nothing"
+        status, out = netctl("stopjobs f-slot1")
+        assert status == 0, (status, out)
+        m = out.strip()
+        assert m.startswith("ok stopjobs slot=f-slot1 uid=2001 killed="), out
+        assert int(m.rsplit("=", 1)[1]) == len(before), (m, before)
+        assert uid_pids(uid) == [], uid_pids(uid)
+        journal = guest.succeed("journalctl -t permafrost-slotctl --no-pager")
+        assert f"slotctl stopjobs slot=f-slot1 uid=2001 killed={len(before)}" in journal, journal
+        # Again with nothing running: ok, killed=0.
+        assert netctl("stopjobs f-slot1")[1].strip() == "ok stopjobs slot=f-slot1 uid=2001 killed=0"
+        # And another slot is not touched.
+        assert members("uids_internet_only") == [2001, 2002, 2003]
+
+    def epoch():
+        return int(guest.succeed("date +%s").strip())
+
+
+    def parse_blocked(out, slot):
+        parts = out.strip().split(" ")
+        assert parts[:3] == ["ok", "blocked", f"slot={slot}"] and parts[3].startswith("n="), out
+        n = int(parts[3][2:])
+        listed = parts[4].split(",") if len(parts) > 4 else []
+        assert n == len(listed) and len(parts) <= 5, out
+        return listed
+
+
+    with subtest("blocked names what a slot was refused, since a time, and nothing of another slot"):
+        t0 = epoch()
+        rejected("f-slot1", lanIp, 8081)
+        guest.succeed("sleep 2")
+        since = epoch()
+        guest.succeed("sleep 1")
+        rejected("f-slot1", lanIp, 8082)
+        rejected("f-slot1", lanIp6, 8082)
+        rejected("f-slot2", lanIp, 8083)
+
+        def listed_since(slot, t):
+            return parse_blocked(netctl(f"blocked {slot} {t}")[1], slot)
+
+        # The kernel line reaches the journal a moment after the connect.
+        retry(lambda _: len(listed_since("f-slot1", since)) >= 2, timeout=timedelta(seconds=30))
+        got = listed_since("f-slot1", since)
+        # A real entry, not n=0: both destinations, the most recent first.
+        assert got == ["[${lanIp6}]:8082", "${lanIp}:8082"], got
+        # What is older than `since` is not there, and is there for an earlier time.
+        assert "${lanIp}:8081" not in got
+        older = listed_since("f-slot1", t0)
+        assert "${lanIp}:8081" in older and "${lanIp}:8082" in older, older
+        # Another slot's refusal is not in the list of this slot.
+        assert not any(x.endswith(":8083") for x in older), older
+        assert listed_since("f-slot2", since) == ["${lanIp}:8083"]
+        # Nothing at a time in the future.
+        status, out = netctl(f"blocked f-slot1 {epoch() + 100}")
+        assert status == 0 and out.strip() == "ok blocked slot=f-slot1 n=0", (status, out)
+        # The list is cut at ten destinations, most recent first.
+        for port in range(8100, 8113):
+            rejected("f-slot1", lanIp, port)
+        retry(lambda _: len(listed_since("f-slot1", since)) == 10, timeout=timedelta(seconds=30))
+        assert listed_since("f-slot1", since)[0] == "${lanIp}:8112"
+        # The grammar: a slot that is not declared, a time that is not a number.
+        assert netctl("blocked f-slot9 1")[0] == 3
+        for bad in ["blocked f-slot1", "blocked f-slot1 x", "blocked f-slot1 1 2", "blocked f-slot1 123456789012", "blocked f-slot1 -1"]:
+            assert netctl(bad)[0] == 2, bad
+        # The reject lines are rate limited, and the rule never decides: a slot that
+        # fills the limit is refused all the same.
+        rejected("f-slot1", lanIp, 8200)
+
+    with subtest("a hardlink cannot cross from one slot to another"):
+        # Each slot has its own bind mount of the share, so a link between two
+        # slots fails with EXDEV even for root, which can see both. The slot
+        # cannot see the other directory at all.
+        assert guest.succeed("sysctl -n fs.protected_hardlinks").strip() == "1"
+        status, out = guest.execute("ln ${slotLib.shareMount}/f-slot2/two /home/slots/f-slot1/workspaces/hl 2>&1")
+        assert status != 0 and "cross-device" in out, (status, out)
+        guest.fail("test -e /home/slots/f-slot1/workspaces/hl")
+        denied("f-slot1", "ln /home/slots/f-slot2/workspaces/two /home/slots/f-slot1/workspaces/hl", "/home/slots/f-slot2")
+        # A file that the slot may not own a link to: protected_hardlinks, or the
+        # mount, refuses it.
+        status, out = site.execute(ssh("f-slot1", "f-slot1", "ln /etc/passwd ~/workspaces/pw 2>&1"))
+        assert status != 0, out
+        guest.fail("test -e /home/slots/f-slot1/workspaces/pw")
+
+    def tree_sums(slot):
+        return guest.succeed(
+            f"cd /home/slots/{slot} && find . -mindepth 1 -type f -print0 | sort -z | xargs -0 sha256sum"
+        )
+
+
+    with subtest("wipe leaves a slot empty, with the default profile, and touches no other slot"):
+        slot, uid = "f-slot1", 2001
+        # The state of a slot that has been in use: a daemon of its own session,
+        # files in the home, the workspaces and the temporary places, a user
+        # unit, a directory with mode 000, nested btrfs subvolumes, a SysV shared
+        # segment, a linger file, a widened profile.
+        site.succeed(
+            ssh(
+                slot,
+                slot,
+                "setsid -f sleep 3000 < /dev/null > /dev/null 2>&1; "
+                "echo a > /tmp/x; echo b > /var/tmp/z; echo c > /dev/shm/y; "
+                "echo d > ~/file; echo e > ~/workspaces/wsfile; mkdir -p ~/.ssh ~/.config/systemd/user ~/deep/er; "
+                "echo f > ~/.ssh/known_hosts; echo '[Service]' > ~/.config/systemd/user/x.service; "
+                "mkdir ~/locked && echo g > ~/locked/h && chmod 000 ~/locked; "
+                "ipcmk -M 4096 > /dev/null",
+            )
+        )
+        guest.succeed(
+            "btrfs subvolume create /home/slots/f-slot1/sub",
+            "btrfs subvolume create /home/slots/f-slot1/sub/inner",
+            "echo i > /home/slots/f-slot1/sub/inner/file",
+            "chown -R 2001:2001 /home/slots/f-slot1/sub",
+            "loginctl enable-linger f-slot1",
+        )
+        assert netctl("set f-slot1 lan-test")[0] == 0
+        # Another slot with a daemon and files: it must come out the same.
+        site.succeed(ssh("f-slot2", "f-slot2", "setsid -f sleep 3000 < /dev/null > /dev/null 2>&1; echo two > ~/f2; echo w > ~/workspaces/w2"))
+        sums2 = tree_sums("f-slot2")
+        pids2 = stable_pids(2002)
+
+        # The control for what follows: every assertion below can fail. Before the
+        # wipe there is a process, a file, a segment, a linger file and a subvolume.
+        assert uid_pids(uid)
+        guest.succeed("test -e /tmp/x && test -e /var/tmp/z && test -e /dev/shm/y")
+        assert "f-slot1" in guest.succeed("ipcs -m")
+        guest.succeed("test -e /var/lib/systemd/linger/f-slot1")
+        assert "f-slot1/sub" in guest.succeed("btrfs subvolume list /home/slots")
+        assert guest.succeed("ls -A /home/slots/f-slot1 | wc -l").strip() != "3"
+
+        status, out = netctl("wipe f-slot1")
+        assert status == 0, (status, out)
+        words = dict(w.split("=") for w in out.strip().split(" ")[2:])
+        assert out.startswith("ok wipe slot=f-slot1 uid=2001 gen="), out
+        assert words["gen"] == "1" and int(words["killed"]) >= 2 and int(words["removed"]) >= 8 and int(words["tmp"]) >= 3, out
+
+        assert uid_pids(uid) == []
+        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == ["tmp", "work", "workspaces"]
+        assert guest.succeed("find /home/slots/f-slot1 -mindepth 2 | wc -l").strip() == "0"
+        assert guest.succeed("find ${slotLib.shareMount}/f-slot1 -mindepth 1 | wc -l").strip() == "0"
+        assert guest.succeed("find /tmp /var/tmp /dev/shm -uid 2001 | wc -l").strip() == "0"
+        assert guest.succeed("stat -c '%a %u' /home/slots/f-slot1 /home/slots/f-slot1/tmp /home/slots/f-slot1/work").split() == ["700", "2001", "700", "2001", "700", "2001"]
+        assert "f-slot1" not in guest.succeed("ipcs -m")
+        guest.fail("test -e /var/lib/systemd/linger/f-slot1")
+        assert "f-slot1" not in guest.succeed("btrfs subvolume list /home/slots")
+        assert netctl("get f-slot1")[1].strip() == "ok get slot=f-slot1 uid=2001 profile=internet-only"
+        assert members("uids_lan_test") == []
+        rejected("f-slot1", lanIp, 8080)
+        # The other slot is as it was: the same files, the same processes.
+        assert tree_sums("f-slot2") == sums2
+        assert stable_pids(2002) == pids2
+        journal = guest.succeed("journalctl -t permafrost-slotctl --no-pager")
+        for step in ["kill", "files", "tmp", "units", "ssh"]:
+            assert f"slotctl wipe slot=f-slot1 step={step}" in journal, (step, journal)
+        assert "slotctl wipe slot=f-slot1 uid=2001 gen=1 done" in journal, journal
+        # The slot works again, as a new account would.
+        site.succeed(ssh(slot, slot, "echo again > ~/workspaces/new && cat ~/workspaces/new && ls ~/tmp ~/work"))
+        # Twice in a row is ok, and gen counts both.
+        for gen in [2, 3]:
+            status, out = netctl("wipe f-slot1")
+            assert status == 0 and f"gen={gen} " in out and "killed=0" in out.replace("killed=1", "killed=0").replace("killed=2", "killed=0"), (status, out)
+        assert guest.succeed("ls -A /home/slots/f-slot1/workspaces | wc -l").strip() == "0"
+
+    with subtest("wipe and stopjobs take only a declared slot, in the grammar"):
+        before = table()
+        for cmd, code in [
+            ("wipe f-slot9", 3),
+            ("wipe root", 3),
+            ("wipe adurable", 3),
+            ("stopjobs f-slot9", 3),
+            ("wipe", 2),
+            ("wipe f-slot1 f-slot2", 2),
+            ("wipe f-slot1; id", 2),
+            ("wipe f-slot1\nwipe f-slot2", 2),
+            ("wipe /home/slots/f-slot1", 2),
+            ("wipe " + "a" * 60, 2),
+            ("stopjobs", 2),
+        ]:
+            status, out = netctl(cmd)
+            assert status == code and len(out.strip().splitlines()) == 1 and out.startswith("err "), (cmd[:40], code, status, out)
+        assert table() == before
+        # The helpers check the grammar again when the wrapper is bypassed, and
+        # each serves its own verbs only.
+        for sock, line, reply in [
+            ("slotctl", "wipe f-slot9\n", "err 3 slot"),
+            ("slotctl", "wipe f-slot1; id\n", "err 2 usage"),
+            ("slotctl", "set f-slot1 lan-test\n", "err 2 usage"),
+            ("slotctl", "wipe f-slot1", "err 2 usage"),
+            ("blocked", "wipe f-slot1\n", "err 2 usage"),
+            ("blocked", "blocked f-slot1 1; id\n", "err 2 usage"),
+            ("netctl", "wipe f-slot1\n", "err 2 usage"),
+            ("netctl", "blocked f-slot1 1\n", "err 2 usage"),
+        ]:
+            out = guest.succeed(f"printf %s {shlex.quote(line)} | socat -t 5 - UNIX-CONNECT:/run/permafrost-{sock}.sock")
+            assert out.strip() == reply, (sock, line, out)
+        assert members("uids_internet_only") == [2001, 2002, 2003]
+        # A slot reaches none of the three sockets, and the wrapper only runs for netctl.
+        for sock in ["slotctl", "blocked", "netctl"]:
+            assert guest.succeed(f"stat -c '%a %U %G' /run/permafrost-{sock}.sock").strip() == "660 root netctl"
+            site.fail(ssh("f-slot2", "f-slot2", f"socat - UNIX-CONNECT:/run/permafrost-{sock}.sock"))
+            site.fail(ssh("adurable", "adurable", f"socat - UNIX-CONNECT:/run/permafrost-{sock}.sock"))
+        status, out = site.execute(ssh("f-slot2", "f-slot2", "SSH_ORIGINAL_COMMAND='wipe f-slot1' permafrost-netctl-ssh"))
+        assert status == 6 and out.strip() == "err 6 internal", (status, out)
+        assert stable_pids(2002) == pids2
+
+    with subtest("a second request for a slot that a wipe works on is busy, and another slot is served"):
+        slot = "f-slot3"
+        # Enough files that the wipe is still at work when the second request
+        # arrives (the log line `start` comes first).
+        site.succeed(ssh(slot, slot, "cd ~/workspaces && mkdir big && cd big && many-files 150000", timeout=300))
+        guest.succeed("rm -f /tmp/wipe.out; (printf 'wipe f-slot3\\n' | socat -t 200 - UNIX-CONNECT:/run/permafrost-slotctl.sock > /tmp/wipe.out 2>&1 &)")
+        guest.wait_until_succeeds("journalctl -t permafrost-slotctl --no-pager | grep -q 'slotctl wipe slot=f-slot3 uid=2003 start'", timeout=60)
+        status, out = netctl("wipe f-slot3")
+        assert status == 7 and out.strip() == "err 7 busy", (status, out)
+        assert netctl("stopjobs f-slot3")[1].strip() == "err 7 busy"
+        # Another slot is served while this one is busy.
+        status, out = netctl("stopjobs f-slot2")
+        assert status == 0 and "killed=" in out, (status, out)
+        guest.wait_until_succeeds("grep -q '^ok wipe slot=f-slot3' /tmp/wipe.out", timeout=120)
+        assert guest.succeed("ls -A /home/slots/f-slot3/workspaces | wc -l").strip() == "0"
+        # After it, the slot is free again.
+        status, out = netctl("wipe f-slot3")
+        assert status == 0 and "gen=2 " in out, (status, out)
+
+    with subtest("a failed step is named, and a retry after the fault goes through"):
+        slot = "f-slot3"
+        # A mount inside a home is not ours to empty: the wipe stops at `files`
+        # and removes nothing under it.
+        guest.succeed(
+            "mkdir /home/slots/f-slot3/mnt",
+            "mount -t tmpfs tmpfs /home/slots/f-slot3/mnt",
+            "echo keep > /home/slots/f-slot3/mnt/keep",
+        )
+        status, out = netctl("wipe f-slot3")
+        assert status == 8 and out.strip() == "err 8 wipe files", (status, out)
+        assert guest.succeed("cat /home/slots/f-slot3/mnt/keep").strip() == "keep"
+        guest.succeed("umount /home/slots/f-slot3/mnt")
+        status, out = netctl("wipe f-slot3")
+        assert status == 0 and "gen=3 " in out, (status, out)
+        assert sorted(guest.succeed("ls -A /home/slots/f-slot3").split()) == ["tmp", "work", "workspaces"]
+
     # --- Workspaces on the host ---------------------------------------------
 
     # The identity of a service that reads the workspaces, as the unit of the
@@ -952,9 +1312,13 @@ pkgs.testers.runNixOSTest {
             f"install -m 0640 -o {${toString hostIdBase} + 1} -g ${toString hostIdBase} /dev/null {TREE}/f-slot1/repo/file",
             f"echo hello > {TREE}/f-slot1/repo/file",
         )
-        opts = lan.succeed(f"findmnt -n -o OPTIONS --mountpoint {VIEW}").strip().splitlines()[-1].split(",")
-        for need in ["ro", "nosymfollow", "nosuid", "nodev"]:
-            assert need in opts, (need, opts)
+        # One mount for each slot, and nothing mounted on the reader directory.
+        for n in [1, 2, 3]:
+            opts = lan.succeed(f"findmnt -n -o OPTIONS --mountpoint {VIEW}/f-slot{n}").strip().splitlines()[-1].split(",")
+            for need in ["ro", "nosymfollow", "nosuid", "nodev"]:
+                assert need in opts, (n, need, opts)
+        lan.fail(f"findmnt -n --mountpoint {VIEW}")
+        assert lan.succeed(f"stat -c '%a %u %g' {VIEW}").strip() == "750 0 ${toString hostIdBase}"
         assert lan.succeed(reader(f"cat {VIEW}/f-slot1/repo/file")).strip() == "hello"
         assert lan.succeed(reader(f"ls {VIEW}/f-slot1/repo")).strip() == "file"
         # The real directory is not there for the reader at all. The same unit
@@ -1003,7 +1367,7 @@ pkgs.testers.runNixOSTest {
         # are the mount's and nothing else's.
         lan.succeed("systemctl start reader-stub.service")
         lan.succeed("systemctl stop reader-stub.service")
-        lan.succeed(f"mount -o remount,bind,rw {VIEW}")
+        lan.succeed(f"mount -o remount,bind,rw {VIEW}/f-slot1")
         lan.succeed(reader(f"touch {VIEW}/f-slot1/repo/new-rw && rm {VIEW}/f-slot1/repo/new-rw"))
         # The check fails on a writable mount, and so does the start of a unit
         # that requires it (the reader of stage 6), every time and not once.
@@ -1014,7 +1378,7 @@ pkgs.testers.runNixOSTest {
         assert status != 0 and "dependency" in out.lower(), (status, out)
         assert lan.execute("systemctl is-active reader-stub.service")[0] != 0
         # Put the mount right again: the reader starts, and the write fails.
-        lan.succeed(f"umount {VIEW} && mount {VIEW}")
+        lan.succeed(f"umount {VIEW}/f-slot1 && mount {VIEW}/f-slot1")
         lan.succeed("systemctl start reader-stub.service")
         lan.succeed("systemctl stop reader-stub.service")
         status, out = lan.execute(reader(f"touch {VIEW}/f-slot1/repo/new") + " 2>&1")
@@ -1028,6 +1392,40 @@ pkgs.testers.runNixOSTest {
         status, out = lan.execute(reader(f"cat {VIEW}/f-slot1/repo/link") + " 2>&1")
         assert status != 0 and "Too many levels of symbolic links" in out, (status, out)
         assert lan.succeed(reader(f"readlink {VIEW}/f-slot1/repo/link")).strip() == "/etc/passwd"
+
+    with subtest("a walk out of the view of a slot ends at its mount"):
+        # One mount for each slot: what sits in the tree outside the slot
+        # directories is not in the view at all (with one mount of the whole
+        # tree the reader read it), and a link out of a slot does not open it.
+        lan.succeed(
+            f"install -m 0640 -o 0 -g ${toString hostIdBase} /dev/null {TREE}/top-secret",
+            f"echo top > {TREE}/top-secret",
+            f"install -d -m 2750 -o {${toString hostIdBase} + 2} -g ${toString hostIdBase} {TREE}/f-slot2",
+            f"install -m 0640 -o {${toString hostIdBase} + 2} -g ${toString hostIdBase} /dev/null {TREE}/f-slot2/secret",
+            f"echo two > {TREE}/f-slot2/secret",
+        )
+        # The controls: root reads them in the tree, and the reader reads slot 2 in its own view.
+        assert lan.succeed(f"cat {TREE}/top-secret").strip() == "top"
+        assert lan.succeed(reader(f"cat {VIEW}/f-slot2/secret")).strip() == "two"
+        for path in [f"{VIEW}/top-secret", f"{VIEW}/f-slot1/../top-secret", f"{VIEW}/f-slot1/repo/../../top-secret"]:
+            status, out = lan.execute(reader(f"cat {path}") + " 2>&1")
+            assert status != 0 and "No such file" in out, (path, status, out)
+        assert lan.succeed(reader(f"ls {VIEW}")).split() == ["f-slot1", "f-slot2", "f-slot3"]
+        # Links that a slot made, to another slot and out of the tree: a file
+        # link, and a link as a part of the path.
+        for name, target in [("to-slot2", "../../f-slot2/secret"), ("to-passwd", "/etc/passwd")]:
+            lan.succeed(f"ln -s {target} {TREE}/f-slot1/repo/{name}")
+            status, out = lan.execute(reader(f"cat {VIEW}/f-slot1/repo/{name}") + " 2>&1")
+            assert status != 0 and "Too many levels of symbolic links" in out, (name, status, out)
+        lan.succeed(f"ln -s ../f-slot2 {TREE}/f-slot1/up")
+        lan.succeed(f"ln -s /etc {TREE}/f-slot1/etc")
+        for path in [f"{VIEW}/f-slot1/up/secret", f"{VIEW}/f-slot1/etc/passwd", f"{VIEW}/f-slot1/repo/../up/secret"]:
+            status, out = lan.execute(reader(f"cat {path}") + " 2>&1")
+            assert status != 0 and "Too many levels of symbolic links" in out, (path, status, out)
+        # Through the real directory the same links do open (root follows them),
+        # so the refusals are the mount's.
+        assert lan.succeed(f"cat {TREE}/f-slot1/up/secret").strip() == "two"
+        lan.succeed(f"rm {TREE}/f-slot1/up {TREE}/f-slot1/etc {TREE}/f-slot1/repo/to-slot2 {TREE}/f-slot1/repo/to-passwd {TREE}/top-secret")
 
     def last_found():
         out = lan.succeed("journalctl -t permafrost-ws-audit --no-pager -o cat")

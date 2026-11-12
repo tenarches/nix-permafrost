@@ -2,7 +2,7 @@
 
 let
   slots = import ../_lib/slots.nix;
-  socketPath = "/run/permafrost-netctl.sock";
+  socketPath = slots.sockets.netctl;
   wrapperName = "permafrost-netctl-ssh";
 in
 {
@@ -33,16 +33,27 @@ in
   # The grammar (the wrapper checks it, and the helper checks it again):
   #
   #   list
+  #   describe
   #   get <slot>
-  #   set <slot> <profile>
+  #   set <slot> <profile> [<digest>]
   #   restore
+  #   wipe <slot>          (slotctl.nix)
+  #   stopjobs <slot>      (slotctl.nix)
+  #   blocked <slot> <since>   (blocked-reader.nix)
   #
   # One line of at most 64 characters from `a-z 0-9 -` and single spaces. No
   # verb takes a host, a port, an address or a uid. The slot and the profile
   # are looked up in a table that is written at build time, and the nft text is
   # a fixed template with one number in it. Answers are one line, `ok ...` or
   # `err <code> <word>`. The exit status is the code: 0 ok, 2 grammar, 3 slot
-  # not declared, 4 profile not declared, 5 nft refused, 6 internal.
+  # not declared, 4 profile not declared, 5 nft refused, 6 internal, 7 busy,
+  # 8 a wipe step failed, 9 the digest of `set` is not the build's.
+  #
+  # The wrapper sends `wipe` and `stopjobs` to the socket of the root helper in
+  # slotctl.nix and `blocked` to the log reader in blocked-reader.nix. Those
+  # are separate units, so a bug in either cannot touch nft: this helper keeps
+  # CAP_NET_ADMIN and nothing else. `describe` says which verbs the guest
+  # serves, so a harness can tell an old guest from a grammar bug.
   #
   # After a change the helper closes the established TCP connections of that
   # slot, because a connection that the new profile does not allow would
@@ -76,6 +87,53 @@ in
       # process (RuntimeDirectoryPreserve), and /run does not outlive a boot.
       statePath = "/run/permafrost-netctl/state.json";
 
+      # What a console may show of a profile, and the digest that `set` can
+      # carry. The digest is the first 16 hex digits of the sha256 of the
+      # canonical JSON (builtins.toJSON sorts the keys) of the hosts, the ports
+      # and the internet rule, so it changes when and only when what the profile
+      # opens changes. A text change (title, description) does not change it.
+      profileDigest =
+        p:
+        builtins.substring 0 16 (
+          builtins.hashString "sha256" (
+            builtins.toJSON {
+              lan = map (e: { inherit (e) address ports; }) p.lan;
+              internet = {
+                inherit (p.internet) enable;
+                tcpPorts = lib.optionals p.internet.enable p.internet.tcpPorts;
+              };
+            }
+          )
+        );
+
+      # The verbs this guest serves. A unit that is not imported is not listed.
+      has = name: lib.attrByPath [ "permafrost" name "enable" ] false config;
+      verbs = [
+        "list"
+        "describe"
+        "get"
+        "set"
+        "restore"
+      ]
+      ++ lib.optionals (has "slotctl") [
+        "wipe"
+        "stopjobs"
+      ]
+      ++ lib.optionals (has "blockedReader") [ "blocked" ];
+
+      describe = {
+        proto = 2;
+        inherit verbs;
+        default = netCfg.defaultProfile;
+        profiles = map (name: {
+          inherit name;
+          inherit (netCfg.profiles.${name}) title description;
+          lan = map (e: { inherit (e) address ports; }) netCfg.profiles.${name}.lan;
+          internet = { inherit (netCfg.profiles.${name}.internet) enable tcpPorts; };
+          digest = profileDigest netCfg.profiles.${name};
+        }) (lib.attrNames netCfg.profiles);
+      };
+
       # The tables the helper may use, fixed at build time.
       table = pkgs.writeText "permafrost-netctl.json" (
         builtins.toJSON {
@@ -86,6 +144,8 @@ in
           );
           profiles = lib.genAttrs (lib.attrNames netCfg.profiles) slots.uidSet;
           default = netCfg.defaultProfile;
+          digests = lib.mapAttrs (_: profileDigest) netCfg.profiles;
+          inherit describe;
           state = statePath;
         }
       );
@@ -108,7 +168,8 @@ in
         TOKEN = re.compile(r"[a-z][a-z0-9-]{0,30}")
         # The only two lines that nft is ever given.
         NFT_LINE = re.compile(r"(delete|add) element inet permafrost uids_[a-z0-9_]+ \{ [0-9]+ \}")
-        CODES = {"usage": 2, "slot": 3, "profile": 4, "apply": 5, "internal": 6}
+        DIGEST = re.compile(r"[0-9a-f]{16}")
+        CODES = {"usage": 2, "slot": 3, "profile": 4, "apply": 5, "internal": 6, "changed": 9}
 
 
         class Refused(Exception):
@@ -256,6 +317,9 @@ in
             parts = line.split(" ")
             if parts == ["list"]:
                 return "ok list default={} profiles={}".format(CFG["default"], ",".join(sorted(CFG["profiles"])))
+            if parts == ["describe"]:
+                # ensure_ascii keeps the line to printable ASCII.
+                return "ok describe " + json.dumps(CFG["describe"], separators=(",", ":"))
             if parts == ["restore"]:
                 return restore()
             if parts[0] == "get" and len(parts) == 2 and TOKEN.fullmatch(parts[1]):
@@ -266,12 +330,20 @@ in
                 now = [p for p, u in members().items() if uid in u]
                 log(f"netctl get slot={slot}")
                 return f"ok get slot={slot} uid={uid} profile={','.join(now) or 'none'}"
-            if parts[0] == "set" and len(parts) == 3 and all(TOKEN.fullmatch(p) for p in parts[1:]):
-                slot, profile = parts[1:]
+            if parts[0] == "set" and len(parts) in (3, 4) and all(TOKEN.fullmatch(p) for p in parts[1:3]):
+                slot, profile = parts[1:3]
+                digest = parts[3] if len(parts) == 4 else None
+                if digest is not None and not DIGEST.fullmatch(digest):
+                    raise Refused("usage")
                 if slot not in CFG["slots"]:
                     raise Refused("slot")
                 if profile not in CFG["profiles"]:
                     raise Refused("profile")
+                # The harness read the profile from `describe` and shows it to a
+                # person. A rebuild that changed what the profile opens makes the
+                # digest differ, and nothing is applied.
+                if digest is not None and digest != CFG["digests"][profile]:
+                    raise Refused("changed")
                 return change(slot, profile)
             raise Refused("usage")
 
@@ -354,14 +426,32 @@ in
           fi
           logger -t permafrost-netctl "netctl-ssh peer=$peer accepted"
 
-          # The helper serves one connection after the other, so a caller may wait
-          # for those in front of it. socat waits this long for the answer.
-          reply=$(printf '%s\n' "$cmd" | socat -t 30 - UNIX-CONNECT:${socketPath} 2>/dev/null) || reply=""
+          # The verb picks the helper. The three helpers check the grammar again.
+          # The net helper serves one connection after the other, so a caller may
+          # wait for those in front of it; a wipe may take long. socat waits this
+          # long for the answer.
+          case ''${cmd%% *} in
+            wipe | stopjobs)
+              sock=${slots.sockets.slotctl}
+              patience=130
+              ;;
+            blocked)
+              sock=${slots.sockets.blocked}
+              patience=30
+              ;;
+            *)
+              sock=${socketPath}
+              patience=30
+              ;;
+          esac
+          reply=$(printf '%s\n' "$cmd" | socat -t "$patience" - "UNIX-CONNECT:$sock" 2>/dev/null) || reply=""
           reply=''${reply%%$'\n'*}
 
-          ok='^ok [ -~]{0,200}$'
-          err='^err ([2-6]) [a-z]+$'
-          if [[ $reply =~ $ok ]]; then
+          # The length is checked apart: a bounded repeat of thousands in a regular
+          # expression makes the matcher take a hundred megabytes and seconds.
+          ok='^ok [ -~]*$'
+          err='^err ([2-9]) [a-z]+( [a-z]+)?$'
+          if (( ''${#reply} <= 8000 )) && [[ $reply =~ $ok ]]; then
             echo "$reply"
           elif [[ $reply =~ $err ]]; then
             echo "$reply"

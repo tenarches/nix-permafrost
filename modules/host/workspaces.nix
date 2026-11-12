@@ -9,7 +9,8 @@ in
   # Each slot of the guest writes into `path/<slot>` as a host id that no
   # account of the host has (hostIdBase + n, from the id map in
   # _lib/slots.nix). This module makes that tree, gives one group the right to
-  # read it, and mounts the tree read-only for the reader at `readerPath`.
+  # read it, and mounts each slot directory read-only for the reader below
+  # `readerPath`, one mount for each slot.
   # Nothing else on the host reads or writes the tree.
   #
   # For the fleet host (host-fleet), `count`, `path` and `hostIdBase` come from
@@ -26,8 +27,8 @@ in
   #   reads the workspaces (the `nix_verify` service of pi-durable), and that
   #   service reaches the data through `readerPath` and not through `path`
   #   (`InaccessiblePaths` and `BindReadOnlyPaths` in its unit);
-  # - permafrost-workspaces-ro-check fails when the mount is missing or has lost
-  #   `ro`, `nosymfollow` or `nosuid`. It is not RemainAfterExit, so every start
+  # - permafrost-workspaces-ro-check fails when the mount of a slot is missing or
+  #   has lost `ro`, `nosymfollow` or `nosuid`. It is not RemainAfterExit, so every start
   #   of a unit that has `Requires=` and `After=` on it runs the check again, and
   #   a failed check stops that start. The reader unit MUST declare both. A
   #   timer runs the check every minute and shows a mount that was remounted
@@ -44,6 +45,12 @@ in
   # today, and `.git/config` still supplies the rest, so a parser that reads
   # the tree and does not run git is the better way. "dubious ownership" is the
   # right answer for a tree that the reader does not own.
+  #
+  # The mounts are one for each slot (`<readerPath>/f-slotN` is `<path>/f-slotN`),
+  # so no walk with `..`, no link and no hardlink leads from the view of one slot
+  # to the data of another: the mount ends at the directory of the slot. The
+  # directory `readerPath` itself is `root:readerGroup 0750` and holds nothing but
+  # the mount points.
   #
   # Not closed: a slot can `chmod 700` its tree and hide it from the reader,
   # which then fails and reads nothing wrong. The reader mount does not follow
@@ -90,8 +97,8 @@ in
           type = lib.types.path;
           default = slots.defaults.readerPath;
           description = ''
-            Where the reader sees the tree: the same directory, as a read-only
-            mount without symlink following. The guest path
+            Where the reader sees the tree: each slot directory as a read-only
+            mount without symlink following, below this path. The guest path
             `<home>/workspaces/<repo>` of the slot `f-slotN` is
             `<readerPath>/f-slotN/<repo>` here.
           '';
@@ -148,6 +155,9 @@ in
             # is inside belongs to the slots.
             tmpfiles.rules = [
               "d ${cfg.path} 0750 root ${toString readerGid} - -"
+              # Only the mount points of the slots are in it. The reader group
+              # can enter it, and a mount point is empty until its mount is up.
+              "d ${cfg.readerPath} 0750 root ${toString readerGid} - -"
             ]
             ++ lib.imap1 (
               n: name: "d ${cfg.path}/${name} 2750 ${toString (cfg.hostIdBase + n)} ${toString readerGid} - -"
@@ -157,27 +167,29 @@ in
               permafrost-workspaces-ro-check = {
                 description = "Check that the workspaces are mounted read-only for the reader";
                 wantedBy = [ "multi-user.target" ];
-                unitConfig.RequiresMountsFor = cfg.readerPath;
+                unitConfig.RequiresMountsFor = slots.readerMountPoints cfg;
                 path = [ pkgs.util-linux ];
                 # Not RemainAfterExit: the unit is inactive after it ran, so a
                 # unit that requires it starts it, and so checks the mount, on
                 # each of its own starts.
                 serviceConfig.Type = "oneshot";
                 script = ''
-                  # The last line is the mount on top.
-                  seen=$(findmnt -n -o OPTIONS --mountpoint ${lib.escapeShellArg cfg.readerPath} | tail -n 1)
-                  if [ -z "$seen" ]; then
-                    echo "${cfg.readerPath} is not a mount point" >&2
-                    exit 1
-                  fi
-                  for need in ro nosymfollow nosuid; do
-                    case ",$seen," in
-                      *",$need,"*) ;;
-                      *)
-                        echo "${cfg.readerPath} is mounted with '$seen' and lacks $need" >&2
-                        exit 1
-                        ;;
-                    esac
+                  for point in ${lib.escapeShellArgs (slots.readerMountPoints cfg)}; do
+                    # The last line is the mount on top.
+                    seen=$(findmnt -n -o OPTIONS --mountpoint "$point" | tail -n 1)
+                    if [ -z "$seen" ]; then
+                      echo "$point is not a mount point" >&2
+                      exit 1
+                    fi
+                    for need in ro nosymfollow nosuid; do
+                      case ",$seen," in
+                        *",$need,"*) ;;
+                        *)
+                          echo "$point is mounted with '$seen' and lacks $need" >&2
+                          exit 1
+                          ;;
+                      esac
+                    done
                   done
                 '';
               };

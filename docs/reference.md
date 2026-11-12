@@ -226,6 +226,13 @@ The rules for a slot, in order:
    `reservedRanges`, on the ports of the profile).
 7. Reject.
 
+A rule with `log` sits before each reject (also before the reject of a local address): `limit
+rate 10/second burst 20 packets log prefix "pf-reject " flags skuid`. It is never the verdict.
+When its limit is used up it is skipped, and the reject below it still runs. The kernel log line
+has `DST=`, `DPT=` and `UID=`, and the `blocked` verb of `netctl` reads it (see the next
+section). The limit is for each rule, so a loop of failed connects writes ten lines a second at
+most, and a refusal can be missing from the list.
+
 The rules have no `ct state established` shortcut, so a change of profile applies to the next
 packet of a connection that is already open. A reject is an ICMP error (`icmpx
 admin-prohibited`), and a TCP reset for TCP over IPv6, so a tool fails at once and does not wait
@@ -268,13 +275,18 @@ namespace and one private `/tmp` for each slot job.
 The harness logs in over ssh as `netctl` with a CA certificate (principal `netctl`). The account
 has `permafrost-netctl-ssh` as its login shell and as its `ForceCommand`, no home, no group, no
 tty and no forwarding (`PermitOpen none`, `PermitListen none`, and every forwarding option off).
-The wrapper checks the line it was given, and sends it to a socket, `/run/permafrost-netctl.sock`,
-that is `root:netctl 0660`. A socket-activated helper reads the line, checks it again, and moves
-the uid of the slot between the sets of the table.
+The wrapper checks the line it was given, and sends it to the socket of the helper that serves the
+verb. Three helpers, each with its own unit and socket (`root:netctl 0660`), so a bug in one cannot
+reach the capabilities of another:
 
-The helper runs as a dynamic user with `CAP_NET_ADMIN` and no inet socket (`AF_UNIX` and
-`AF_NETLINK` only), serves one connection after the other, and exits after ten idle seconds. There
-is no sudo and no polkit. The Vault role that signs a `netctl` certificate is outside this
+| Helper | Socket | Verbs | Runs as |
+|---|---|---|---|
+| net helper (`netctl.nix`) | `/run/permafrost-netctl.sock` | `list`, `describe`, `get`, `set`, `restore` | dynamic user, `CAP_NET_ADMIN` only, no inet socket, exits after ten idle seconds |
+| slot helper (`slotctl.nix`) | `/run/permafrost-slotctl.sock` | `wipe`, `stopjobs` | root, seven capabilities (`CAP_KILL`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SETGID`), `AF_UNIX` only |
+| log reader (`blocked-reader.nix`) | `/run/permafrost-blocked.sock` | `blocked` | dynamic user in `systemd-journal`, no capability, `AF_UNIX` only, read-only system |
+
+The net helper serves one connection after the other. The slot helper serves one connection for
+each thread and one slot at a time (see `wipe`). There is no sudo and no polkit. The Vault role that signs a `netctl` certificate is outside this
 repository: only the harness may obtain one, and a slot has no way to widen its own profile
 without it.
 
@@ -283,33 +295,81 @@ The grammar is one line of at most 64 characters from `a-z 0-9 -` and single spa
 | Line | Answer |
 |---|---|
 | `list` | `ok list default=<profile> profiles=<p1>,<p2>,...` |
+| `describe` | `ok describe <json>`, one line of ASCII. See below. |
 | `get <slot>` | `ok get slot=f-slot3 uid=2003 profile=<profile>` |
-| `set <slot> <profile>` | `ok set slot=f-slot3 uid=2003 from=<old> to=<new> killed=<n>`, or `... profile=<p> unchanged` |
+| `set <slot> <profile> [<digest>]` | `ok set slot=f-slot3 uid=2003 from=<old> to=<new> killed=<n>`, or `... profile=<p> unchanged`. With a digest of 16 hex digits, the change is made only when it is the build's digest of that profile, else `err 9 changed`. |
 | `restore` | `ok restore slots=<n> killed=<k>`, `ok restore unchanged`, or `ok restore nothing`. Applies the recorded profiles again. `permafrost-netctl-restore.service` calls it after `nftables.service` loads. |
+| `stopjobs <slot>` | `ok stopjobs slot=f-slot3 uid=2003 killed=<n>`. Ends every process of the uid, whatever protocol and session, and removes nothing. |
+| `wipe <slot>` | `ok wipe slot=f-slot3 uid=2003 gen=<n> killed=<k> removed=<files> tmp=<t>`. See below. |
+| `blocked <slot> <since>` | `ok blocked slot=f-slot3 n=<k> <address>:<port>,...`. See below. |
 
-No verb takes a host, a port, an address or a uid. The slot and the profile are looked up in a table
-that is written at build time, and the nft text is a fixed template with one number in it. A
-failure is `err <code> <word>`, and the exit status of the ssh command is the code:
+No verb takes a host, a port, an address, a path or a uid. The slot and the profile are looked up
+in a table that is written at build time, and the nft text is a fixed template with one number in it.
+A failure is `err <code> <word>` (for a failed step of a wipe `err 8 wipe <step>`), and the exit
+status of the ssh command is the code:
 
 | Code | Word | Meaning |
 |---|---|---|
 | 0 | `ok` | Done. |
-| 2 | `usage` | The line is outside the grammar. |
+| 2 | `usage` | The line is outside the grammar. A guest that has no `describe` answers this, so a harness tells an old guest from a grammar bug with `describe` (`proto` and `verbs`), and not with this code. |
 | 3 | `slot` | The slot is not declared. |
 | 4 | `profile` | The profile is not declared. |
 | 5 | `apply` | nft refused the change. |
 | 6 | `internal` | The helper did not answer, or failed. |
+| 7 | `busy` | A `wipe` or `stopjobs` of that slot is working. Try again later. |
+| 8 | `step` | A step of `wipe` or `stopjobs` failed. The answer names it: `err 8 wipe kill`. |
+| 9 | `changed` | The digest that `set` carried is not the build's digest of that profile. Read `describe` again. |
 
-Codes 2, 3 and 4 never change a rule. A change is one nft transaction (delete from the old set, add
+Codes 2, 3, 4 and 9 never change a rule. A change is one nft transaction (delete from the old set, add
 to the new one: both or none). After a change the helper closes the established TCP connections of
 that slot with `ss -K`, whatever the direction of the change, and reports `killed=<n>`. If the
 kernel cannot do that, the answer ends with `kill=unsupported`, and the rules reject the next
-packet of the connection. UDP and raw sockets are not closed.
+packet of the connection. UDP and raw sockets are not closed: a narrowing is followed by `stopjobs`.
 
-Log lines go to the journal, tag `permafrost-netctl`: `netctl set slot=f-slot3 uid=2003
-from=internet-only to=lan-test killed=2`, `netctl get slot=f-slot3`, `netctl reject code=3
+**`describe`.** One line, `ok describe <json>`:
+`{"proto":2,"verbs":[...],"default":"internet-only","profiles":[{"name","title","description","lan":[{"address","ports":[...]}],"internet":{"enable","tcpPorts":[...]},"digest"}]}`.
+It is made at build time from the same attribute set as the nft rules (`permafrost.network.profiles`), so a console
+never shows a host that the firewall does not use. `proto` is `2` for this grammar. `verbs` lists the
+verbs that this guest serves: a guest without `guest-slotctl` lacks `wipe` and `stopjobs`, and one without `guest-blocked-reader` lacks `blocked`.
+`digest` is the first 16 hex digits of the sha256 of the canonical JSON (sorted keys) of `{"lan":[{address,ports}],"internet":{enable,tcpPorts}}`, with
+`tcpPorts` empty when the internet is off. A change of the title or the description does not change it.
+
+**`wipe`.** Makes a slot empty so that another factory can have it. The steps, in this order, each
+logged with tag `permafrost-slotctl` (`slotctl wipe slot=f-slot3 step=<step> ...`):
+
+| Step | What it does |
+|---|---|
+| `kill` | `SIGKILL` for the units `user@<uid>.service` and `user-<uid>.slice` (so nothing starts the processes again), then for every process of the uid that is left, setsid daemons included, until none is left (10 seconds at most). SysV shared memory, queues and semaphores of the uid are removed (by `ipcrm` run as the slot: removing needs the owner or `CAP_SYS_ADMIN`, and `CAP_IPC_OWNER` is not enough). |
+| `files` | Everything in the home (dotfiles too), and everything in the `workspaces` directory, which is the mount of the share. It works by directory descriptor, with no recursion and no link followed. A directory on another device is removed only when it is the root of a btrfs subvolume (emptied first, so nested subvolumes go too). A mount stops the wipe here, with nothing under it touched. |
+| `tmp` | The files of the uid in `/tmp`, `/var/tmp` and `/dev/shm`. |
+| `units` | `user@`, `user-runtime-dir@` and the slice stop, and `/var/lib/systemd/linger/<slot>` goes. |
+| `ssh` | The ssh state (`known_hosts`, keys, control sockets) is inside the home, so this step checks that `~/.ssh` is gone. |
+| `skeleton` | `systemd-tmpfiles --create` makes `tmp` and `work` again. The profile goes back to the default (a `set` through the net helper; if it fails the step is `profile`). Then the home must hold exactly `tmp`, `work` and `workspaces` (empty, mode 0700, owner the slot), and no process of the uid. |
+
+It is safe to run again after a crash or a failed step. `gen` counts the wipes of that slot that ended
+well, in `/var/lib/permafrost-slotctl`. A second `wipe` or `stopjobs` of a slot that one is working on is
+`err 7 busy`. Another slot is served at the same time. The helper does not close TCP with `ss -K`: every socket of the uid belongs to a process that is dead by then.
+The `netctl` certificate can wipe or stop any slot of the guest. That is no new authority when one
+guest serves one harness, which already holds the login of every slot. Two harnesses on one guest
+need two guests, or their own `netctl` role.
+
+**`blocked`.** `blocked <slot> <since>` (`since` is epoch seconds, 11 digits at most) answers
+with the destinations that the egress table refused for the uid of the slot, from the kernel log
+lines at or after `since`: at most ten different `<address>:<port>` (an IPv6 address in
+brackets), the most recent first. `n` is the number in the list, and `n=0` has no list. The list is
+information for a person who decides about a wider profile. It does not change a rule, and it may not list every
+block: the log rule is rate limited, and the kernel log can lose a line under load. It reads
+`journalctl -k --since @<since>` with fixed arguments and keeps the lines that start with `pf-reject `
+and carry `UID=` of the slot and `DPT=`.
+
+Log lines go to the journal. The net helper, tag `permafrost-netctl`: `netctl set slot=f-slot3
+uid=2003 from=internet-only to=lan-test killed=2`, `netctl get slot=f-slot3`, `netctl reject code=3
 reason=slot input=...` (the input is escaped and cut at 64 characters), and from the wrapper
-`netctl-ssh peer=<address> accepted` or `rejected`.
+`netctl-ssh peer=<address> accepted` or `rejected`. The slot helper, tag `permafrost-slotctl`:
+`slotctl wipe slot=f-slot3 uid=2003 start`, one `step=<step>` line for each step, `slotctl wipe
+slot=f-slot3 uid=2003 gen=<n> done`, `slotctl wipe slot=f-slot3 step=<step> failed: <why>`,
+`slotctl stopjobs slot=f-slot3 uid=2003 killed=<n>`, `slotctl busy slot=... verb=...`. The reader, tag `permafrost-blocked`:
+`blocked slot=f-slot3 since=<t> n=<k>`.
 
 Not done: `CAP_NET_ADMIN` lets a hijacked helper rewrite the whole ruleset, not only the uid
 sets. The limit is the size of the helper and the mode of the socket.
@@ -344,7 +404,7 @@ Layout, and the path rule that pi-durable uses:
 | Where | Path |
 |---|---|
 | Host, written by the guest | `/var/lib/permafrost-workspaces/f-slotN/<repo>` |
-| Host, read by the reader | `/srv/permafrost-workspaces/f-slotN/<repo>` (read-only view of the line above) |
+| Host, read by the reader | `/srv/permafrost-workspaces/f-slotN/<repo>` (a read-only mount of `/var/lib/permafrost-workspaces/f-slotN`, one mount for each slot) |
 | Guest, the slot | `/home/slots/f-slotN/workspaces/<repo>` |
 | Guest, root only | `/mnt/factory/workspaces/f-slotN/<repo>` |
 
@@ -404,7 +464,7 @@ imported by `permafrost-host`) is for a host that holds the share. The options a
 | Option | Default | Meaning |
 |---|---|---|
 | `path` | `/var/lib/permafrost-workspaces` | The directory of the share. |
-| `readerPath` | `/srv/permafrost-workspaces` | Where the reader sees it. |
+| `readerPath` | `/srv/permafrost-workspaces` | Where the reader sees it: one read-only mount for each slot below this directory, which is `root:readerGroup 0750` and holds only the mount points. |
 | `readerGroup` | `permafrost-ws` | The group of the reader. Its gid is `hostIdBase`. |
 | `hostIdBase` | `2000000000` | As in the guest. |
 | `count` | `16` | The number of slot directories. |
@@ -415,13 +475,19 @@ evaluates the guest (`host-fleet`), `count`, `userPrefix`, `path` and `hostIdBas
 it with `mkDefault`. A host that starts the guest with the runner has no guest in its own
 configuration, so the check `workspaces-ids-agree` compares the two sets of defaults.
 
-- **Read-only view.** `fileSystems.<readerPath>` binds `path` with `bind,ro,nosymfollow,nosuid,nodev`.
+- **Read-only views.** One mount for each slot: `fileSystems."<readerPath>/f-slotN"` binds `<path>/f-slotN` with
+  `bind,ro,nosymfollow,nosuid,nodev`. A path walk that leaves the directory of a slot (`..`, a link that a slot made,
+  a hardlink) meets the end of the mount, and not the data of another slot or whatever else is in `path`. The guest has
+  one bind mount for each slot as well, so a hardlink from one slot to another fails there with `EXDEV` (and
+  `fs.protected_hardlinks` stops a link to a file the slot cannot read). A reader may still name any slot, by design:
+  it is the service that verifies the workspaces of every factory, and the check of which slot a caller may name is the
+  job of the caller (pi-durable guards the path).
   **This mount is the only write barrier.** A slot owns its tree and can `chmod -R g+w` it,
   which gives the reader group write bits; the read-only mount is what stops the write. So
   the group has one kind of member, the service that reads the workspaces, and that service
   reaches the data only through `readerPath` (`BindReadOnlyPaths` and `InaccessiblePaths = [ path ]`
-  in its unit). The unit `permafrost-workspaces-ro-check.service` fails when `findmnt` shows no mount or does
-  not show `ro`, `nosymfollow` and `nosuid`. It is not `RemainAfterExit`, so each start of a unit
+  in its unit). The unit `permafrost-workspaces-ro-check.service` fails when `findmnt` shows no mount for a slot or does
+  not show `ro`, `nosymfollow` and `nosuid` for it. It is not `RemainAfterExit`, so each start of a unit
   that has `Requires=` and `After=` on it runs the check again and a failed check stops that
   start. The unit of the reader MUST declare both (`After=` alone does not stop a start after a
   failure). A timer runs the check every minute, so a mount that was made writable later shows as a

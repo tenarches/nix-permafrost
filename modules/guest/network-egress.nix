@@ -216,12 +216,23 @@ in
       # later, at the retransmit of the SYN, with EACCES. A TCP reset fails it at
       # once with ECONNREFUSED, so v6 TCP takes that. Everything else, UDP too,
       # gets the ICMP error, which arrives at once.
+      #
+      # A rule with `log` goes before each reject, so that `blocked` of the netctl
+      # login can say what a slot tried to reach (blocked-reader.nix). The log
+      # rule is never the verdict: when its limit is used up it is skipped, and the
+      # reject below it still runs. `flags skuid` puts `UID=` in the kernel line,
+      # and the reader keeps the lines of the uid of the slot it was asked about.
+      # The limit is per rule, so a loop of failed connects fills the journal at
+      # ten lines a second at most, and a block can be missed under load.
+      logRule = ''limit rate 10/second burst 20 packets log prefix "${slots.logPrefix}" flags skuid'';
       reject = ''
+        ${logRule}
         meta nfproto ipv6 meta l4proto tcp reject with tcp reset
         reject with icmpx type admin-prohibited
       '';
       stub = "ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept";
       local = ''
+        fib daddr type local ${logRule}
         meta nfproto ipv6 meta l4proto tcp fib daddr type local reject with tcp reset
         fib daddr type local reject with icmpx type admin-prohibited
       '';

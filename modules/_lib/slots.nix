@@ -124,27 +124,40 @@ rec {
       }) (names cfg)
     );
 
-  # The read-only view of the host tree for the reader, as a `fileSystems`
-  # entry for host/workspaces.nix (`cfg` is `permafrost.host.workspaces`). Here
+  # The read-only views of the host tree for the reader, as `fileSystems`
+  # entries for host/workspaces.nix (`cfg` is `permafrost.host.workspaces`). Here
   # for the same reason as `workspaceMounts`: the VM check mounts exactly this.
+  #
+  # One mount for each slot, `<readerPath>/f-slotN` from `<path>/f-slotN`, and
+  # not one mount of the whole tree. A path walk that leaves the directory of a
+  # slot (`..`, a link that a slot made, a hardlink) then meets the end of the
+  # mount and not the data of another slot. The guest has one bind mount for each
+  # slot as well, so a hardlink between two slots fails there with EXDEV.
   #
   # nosymfollow: the reader runs with host rights and a slot makes the links, so
   # a link to /etc/passwd must not open it. ro: the one write barrier, see the
   # header of host/workspaces.nix. A bind mount may need a remount to take ro
   # and the other flags; the ro-check unit looks at what the kernel shows.
-  readerMount = cfg: {
-    ${cfg.readerPath} = {
-      device = cfg.path;
-      fsType = "none";
-      options = [
-        "bind"
-        "ro"
-        "nosymfollow"
-        "nosuid"
-        "nodev"
-      ];
-    };
-  };
+  readerMountPoints = cfg: map (name: "${cfg.readerPath}/${name}") (names cfg);
+
+  readerMount =
+    cfg:
+    builtins.listToAttrs (
+      map (name: {
+        name = "${cfg.readerPath}/${name}";
+        value = {
+          device = "${cfg.path}/${name}";
+          fsType = "none";
+          options = [
+            "bind"
+            "ro"
+            "nosymfollow"
+            "nosuid"
+            "nodev"
+          ];
+        };
+      }) (names cfg)
+    );
 
   # The shell function that guards the host tree of the workspaces share, for
   # the runner (_pkgs/runner.nix) and for the check that runs it on a symlink.
@@ -183,6 +196,18 @@ rec {
     name = "netctl";
     uid = 1002;
   };
+
+  # The sockets of the three helpers behind the `netctl` login (guest/netctl.nix
+  # sends each verb to one of them). Every one is `root:netctl 0660`.
+  sockets = {
+    netctl = "/run/permafrost-netctl.sock";
+    slotctl = "/run/permafrost-slotctl.sock";
+    blocked = "/run/permafrost-blocked.sock";
+  };
+
+  # The prefix of the kernel log line of a rejected packet of a slot
+  # (guest/network-egress.nix writes it, guest/blocked-reader.nix reads it).
+  logPrefix = "pf-reject ";
 
   # The name of a profile inside nft identifiers: the profile names allow `-`,
   # nft identifiers do not.

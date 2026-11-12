@@ -37,7 +37,7 @@ in
       virtiofsdArgs = slotLib.virtiofsdArgs slotCfg;
       hostPathText = slotCfg.workspaces.hostPath;
       hostCfg = host.permafrost.host.workspaces;
-      readerMountPoint = hostCfg.readerPath;
+      readerMountPoints = slotLib.readerMountPoints hostCfg;
 
       # What the id map says about every id, read from the flags. A rule is
       # `type:a:b[:c]`: `map` is guest a to host b for c ids, `forbid-guest` is
@@ -248,32 +248,49 @@ in
         # the real configuration.
         host-workspaces-config = evalCheck "host-workspaces-config" [
           {
-            assertion = host.fileSystems ? ${readerMountPoint};
-            message = "the host has no mount for the reader";
-          }
-          {
-            assertion = lib.all (o: lib.elem o host.fileSystems.${readerMountPoint}.options) [
-              "bind"
-              "ro"
-              "nosymfollow"
-              "nosuid"
-              "nodev"
-            ];
-            message = "the reader mount lacks one of bind, ro, nosymfollow, nosuid, nodev";
-          }
-          {
             assertion =
-              host.fileSystems.${readerMountPoint}.device == hostCfg.path
-              && host.fileSystems.${readerMountPoint}.fsType == "none";
-            message = "the reader mount is not a bind of the share directory";
+              lib.all (point: host.fileSystems ? ${point}) readerMountPoints && readerMountPoints != [ ];
+            message = "the host has no mount of the reader for a slot";
           }
           {
-            # The same function builds the mount in the VM check, so the check
+            assertion = !(host.fileSystems ? ${hostCfg.readerPath});
+            message = "the reader has one mount for the whole tree; it must be one for each slot (a walk out of a slot directory must end at its mount)";
+          }
+          {
+            assertion = lib.all (
+              point:
+              lib.all (o: lib.elem o host.fileSystems.${point}.options) [
+                "bind"
+                "ro"
+                "nosymfollow"
+                "nosuid"
+                "nodev"
+              ]
+            ) readerMountPoints;
+            message = "a reader mount lacks one of bind, ro, nosymfollow, nosuid, nodev";
+          }
+          {
+            assertion = lib.all (
+              n:
+              let
+                point = "${hostCfg.readerPath}/${slotLib.name hostCfg n}";
+              in
+              host.fileSystems.${point}.device == "${hostCfg.path}/${slotLib.name hostCfg n}"
+              && host.fileSystems.${point}.fsType == "none"
+            ) (lib.range 1 hostCfg.count);
+            message = "a reader mount is not a bind of the directory of its slot";
+          }
+          {
+            # The same function builds the mounts in the VM check, so the check
             # tests what the host has.
-            assertion =
-              (slotLib.readerMount hostCfg).${readerMountPoint}.options
-              == host.fileSystems.${readerMountPoint}.options;
+            assertion = lib.all (
+              point: (slotLib.readerMount hostCfg).${point}.options == host.fileSystems.${point}.options
+            ) readerMountPoints;
             message = "the VM check mounts other options than the host has";
+          }
+          {
+            assertion = lib.elem "d ${hostCfg.readerPath} 0750 root ${toString hostCfg.hostIdBase} - -" host.systemd.tmpfiles.rules;
+            message = "the reader directory has no tmpfiles line 0750 root:readerGroup";
           }
           {
             assertion = lib.elem "d ${hostCfg.path} 0750 root ${toString hostCfg.hostIdBase} - -" host.systemd.tmpfiles.rules;
