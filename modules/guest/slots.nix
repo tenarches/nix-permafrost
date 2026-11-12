@@ -133,14 +133,16 @@ in
           };
 
           hostIdBase = lib.mkOption {
-            type = lib.types.ints.between 1879048192 2147483000;
+            type = lib.types.ints.between slots.hostIdMin (slots.hostIdMax - 100);
             default = slots.defaults.hostIdBase;
             description = ''
               Slot n writes into the share as host uid and gid `hostIdBase +
               n`, and the host group that reads the files is `hostIdBase`
               itself. The range is above the container ids of systemd and below
-              2^31, so no account of a host has one of these numbers. Changing
-              it later moves the owner of every file in the share.
+              its foreign range (0x7FFF0000), so no account of a host has one of
+              these numbers. Every host id outside the slot ids is shown to the
+              guest as nobody. Changing it later moves the owner of every file
+              in the share.
             '';
           };
         };

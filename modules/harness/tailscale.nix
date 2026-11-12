@@ -17,6 +17,14 @@
     # any agent running in it could read. When no key was delivered every unit
     # below is skipped, and the guest simply is not on the tailnet.
     #
+    # The local API socket is closed to the factory slots. tailscaled runs as
+    # root, so a call that dials on behalf of the caller (`tailscale nc`) leaves
+    # from a uid that the egress table does not filter, and a slot could reach
+    # the tailnet that the table denies (100.64.0.0/10). The unit's own runtime
+    # directory is 0755 and the socket in it is 0666. Here the directory is
+    # root:tailscale 0750, so only root and the group `tailscale` (agent, which
+    # reads the status) can reach the socket; a slot gets EACCES on connect.
+    #
     # Access control belongs to the tailnet's ACL, not to this file: the node is
     # tagged by the key that registered it, and the tag should be granted
     # inbound 443 from the people who use it and no outbound access at all.
@@ -50,8 +58,19 @@
 
       # No `--operator`, deliberately: the agent user gets read-only status and
       # no way to change the node, its serve config, or its ACL tag.
+      users.groups.tailscale = { };
+      users.users.agent.extraGroups = [ "tailscale" ];
+
       systemd.services = {
-        tailscaled.unitConfig = onlyWithKey;
+        tailscaled = {
+          unitConfig = onlyWithKey;
+          serviceConfig = {
+            # The directory is closed from the moment it exists, root:root, and
+            # opened to the group once the daemon is up.
+            RuntimeDirectoryMode = "0750";
+            ExecStartPost = "${pkgs.coreutils}/bin/chgrp tailscale /run/tailscale";
+          };
+        };
         tailscaled-autoconnect.unitConfig = onlyWithKey;
 
         tailscale-serve = {

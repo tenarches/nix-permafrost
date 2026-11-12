@@ -38,15 +38,20 @@ in
   #
   # Two more groups of sockets are confined, because both would be a way round
   # the profile of a slot. The Nix build users (group nixbld) run the fetch of a
-  # fixed-output derivation with network access, and a slot may start one, so
-  # they get the internal list and the public ports, never a LAN host. The
-  # netctl login gets the internal list only. Everyone else is not filtered:
-  # root, the daemons, `agent` and `adurable` fall through to the accept policy.
-  # A LAN profile does not reach builds: a fetch inside `nix build` from a LAN
-  # host fails.
+  # fixed-output derivation with network access, and a slot may start one. The
+  # rules cannot tell which slot asked, so a build gets the internal list and
+  # the public ports that EVERY declared profile allows: the narrowest profile
+  # sets the limit, and one profile without internet takes the public ports
+  # away from all builds. A build never reaches a LAN host. The netctl login
+  # gets the internal list only. Everyone else is not filtered: root, the
+  # daemons, `agent` and `adurable` fall through to the accept policy. A LAN
+  # profile does not reach builds: a fetch inside `nix build` from a LAN host
+  # fails.
   #
-  # Reserved ranges are not "the internet". TEST-NET and 2001:db8::/32 are not
-  # listed, so they count as public. The VM check uses 203.0.113.0/24 as the
+  # Reserved ranges are not "the internet". The IPv6 list holds the prefixes
+  # that carry an IPv4 address (NAT64, 6to4, Teredo, mapped addresses), so a
+  # LAN host behind a NAT64 router is not "public" either. TEST-NET and
+  # 2001:db8::/32 are not listed, so they count as public. The VM check uses 203.0.113.0/24 as the
   # internet for that reason. 100.64.0.0/10 is listed, because tailscale and
   # carrier NAT live there: a deployment that needs a tailnet host adds it to
   # `internal` or to a LAN profile.
@@ -54,12 +59,18 @@ in
   # Names are not resolved by nftables, which would fail the whole load when the
   # lookup fails before the network is up. The internal list is addresses.
   #
+  # The table fails closed. permafrost-egress-guard runs before sshd and fails
+  # unless the chain `egress` is loaded and jumps to `confined`, so a ruleset
+  # that did not load at boot leaves the guest without a login, and not with
+  # slots that reach the LAN. nftables.service is only ordered before the
+  # network, and its failure stops nothing.
+  #
   # Not closed (the table does not see them): AF_VSOCK to the host, unix
   # sockets (abstract ones too), /tmp and the Nix store are shared between all
   # accounts. DNS query names leave through the declared resolver. The way to
   # close these is one network namespace and one private /tmp for each slot job.
   flake.modules.nixos.guest-network-egress =
-    { config, ... }:
+    { config, pkgs, ... }:
 
     let
       cfg = config.permafrost.network;
@@ -68,6 +79,12 @@ in
       v4 = lib.filter (a: !isV6 a);
       v6 = lib.filter isV6;
       profileNames = lib.attrNames cfg.profiles;
+
+      # The public ports of a build: those that every profile allows.
+      profilePorts = map (
+        n: lib.optionals cfg.profiles.${n}.internet.enable cfg.profiles.${n}.internet.tcpPorts
+      ) profileNames;
+      builderPorts = lib.foldl' lib.intersectLists (lib.head profilePorts) (lib.tail profilePorts);
 
       list = lib.concatStringsSep ", ";
       set =
@@ -250,10 +267,7 @@ in
           ${stub}
           ${local}
           ${shared}
-          ${publicRule [
-            80
-            443
-          ]}
+          ${publicRule builderPorts}
           ${reject}
         }
 
@@ -417,6 +431,14 @@ in
               "fc00::/7"
               "fe80::/10"
               "ff00::/8"
+              # Prefixes that carry an IPv4 address. A NAT64 router would turn
+              # 64:ff9b::c0a8:105 into the LAN host 192.168.1.5, and the IPv4
+              # lists never see that address.
+              "::ffff:0:0/96"
+              "64:ff9b::/96"
+              "64:ff9b:1::/48"
+              "2002::/16"
+              "2001::/32"
             ];
             description = "The IPv6 ranges that are not the internet.";
           };
@@ -463,6 +485,31 @@ in
             message = "A permafrost.network.internal entry needs tcpPorts, or allPorts = true, and not both.";
           }
         ];
+
+        # A login that finds no table would open the LAN to every slot. A failed
+        # guard stops sshd for everyone, root too, and the serial console is then
+        # the way in (as for permafrost-factory-guard in slots.nix).
+        systemd.services.permafrost-egress-guard = {
+          description = "Check that the egress table of the slots is loaded";
+          requiredBy = [ "sshd.service" ];
+          before = [ "sshd.service" ];
+          requires = [ "nftables.service" ];
+          after = [ "nftables.service" ];
+          path = [
+            pkgs.nftables
+            pkgs.gnugrep
+          ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = ''
+            nft list chain inet permafrost egress | grep -q 'jump confined' || {
+              echo "the chain inet permafrost egress is not loaded" >&2
+              exit 1
+            }
+          '';
+        };
 
         networking.nftables = {
           enable = true;

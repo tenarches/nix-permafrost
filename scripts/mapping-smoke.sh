@@ -18,6 +18,8 @@
 #   the setgid directory give;
 # - guest root cannot create a file, and cannot chown one to 0 or to an id
 #   outside the slot range, and can chown one to a slot id;
+# - a host file that a real account owns (uid 2001, root) shows in the guest as
+#   nobody, and not as a slot or as root;
 # - --translate-uid with --sandbox namespace works as root (a user namespace
 #   that maps only uid 0 would make every create fail).
 #
@@ -49,7 +51,7 @@ read -r -a FLAGS < <(nix eval --json --impure --expr "
 " | jq -r 'join(" ")')
 BASE="$(jq -r .workspaces.hostIdBase <<<"$SLOTS_JSON")"
 UIDBASE="$(jq -r .uidBase <<<"$SLOTS_JSON")"
-[ "${#FLAGS[@]}" -eq 12 ] || { echo "expected 12 words of flags, got ${#FLAGS[@]}" >&2; exit 2; }
+[ "${#FLAGS[@]}" -eq 20 ] || { echo "expected 20 words of flags, got ${#FLAGS[@]}" >&2; exit 2; }
 
 # A kernel, an initrd that runs the test as a unit, virtiofsd and qemu.
 EXPR="
@@ -104,6 +106,10 @@ QEMU="$(build qemu)"
 SHARE="$WORK/share"
 sudo install -d -m 0750 -o 0 -g "$BASE" "$SHARE"
 sudo install -d -m 2750 -o $((BASE + 1)) -g "$BASE" "$SHARE/f-slot1"
+# Two files that no slot made: one owned by a host uid that is also a guest slot
+# id, one by root. The map must not show them as a slot's file or as root's.
+sudo install -m 0644 -o $((UIDBASE + 1)) -g $((UIDBASE + 1)) /dev/null "$SHARE/f-slot1/foreign-uid"
+sudo install -m 0644 -o 0 -g 0 /dev/null "$SHARE/f-slot1/foreign-root"
 
 # The log is the user's, so the redirect is not under sudo on purpose.
 echo "virtiofsd: sandbox $SANDBOX, flags ${FLAGS[*]}"
@@ -156,6 +162,8 @@ want "SMOKE root-create refused" "$WORK/results.txt"
 want "SMOKE root-chown-0 refused" "$WORK/results.txt"
 want "SMOKE root-chown-out-of-range refused" "$WORK/results.txt"
 want "SMOKE root-chown-slot2 ok" "$WORK/results.txt"
+want "SMOKE foreign-uid 65534:65534" "$WORK/results.txt"
+want "SMOKE foreign-root 65534:65534" "$WORK/results.txt"
 want "$((BASE + 1)):$BASE 2750 d" "$WORK/host.txt"
 want "$((BASE + 1)):$BASE 2750 d/sub" "$WORK/host.txt"
 want "$((BASE + 1)):$BASE 640 f" "$WORK/host.txt"

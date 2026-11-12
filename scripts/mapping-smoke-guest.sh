@@ -20,4 +20,7 @@ setpriv --reuid "$slot1" --regid "$slot1" --clear-groups sh -c 'umask 0027; touc
 if chown 0 chowned 2>/dev/null; then echo "SMOKE root-chown-0 allowed"; else echo "SMOKE root-chown-0 refused"; fi
 if chown 5000 chowned 2>/dev/null; then echo "SMOKE root-chown-out-of-range allowed"; else echo "SMOKE root-chown-out-of-range refused"; fi
 if chown "$slot2" chowned 2>/dev/null; then echo "SMOKE root-chown-slot2 ok"; else echo "SMOKE root-chown-slot2 failed"; fi
+# Host files that no slot made show as nobody (squash-host), not as themselves.
+echo "SMOKE foreign-uid $(stat -c '%u:%g' foreign-uid)"
+echo "SMOKE foreign-root $(stat -c '%u:%g' foreign-root)"
 echo "SMOKE done"

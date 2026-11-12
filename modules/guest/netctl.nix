@@ -35,6 +35,7 @@ in
   #   list
   #   get <slot>
   #   set <slot> <profile>
+  #   restore
   #
   # One line of at most 64 characters from `a-z 0-9 -` and single spaces. No
   # verb takes a host, a port, an address or a uid. The slot and the profile
@@ -52,8 +53,17 @@ in
   # Not closed: CAP_NET_ADMIN lets a hijacked helper rewrite the whole ruleset,
   # not only the uid sets. The limit is the size of the helper (one short
   # Python file, no input beyond the grammar, no network) and the socket mode.
-  # The change is not stored. A reboot or `systemctl reload nftables` puts
-  # every slot back in the default profile.
+  # The profile of each slot is kept in /run, so it lasts until the next boot and
+  # no longer. A reload of nftables.service (a deploy that changes an unrelated
+  # rule does that) deletes the table and loads it again, which would put every
+  # slot back in the default profile and widen a slot that was narrowed. So
+  # permafrost-netctl-restore runs after each reload or restart of
+  # nftables.service and asks the helper for `restore`, which applies the
+  # recorded profiles again and closes the TCP connections of the slots that it
+  # narrows. Between the reload and the restore (a short time: the reload of the
+  # restore unit is queued, not waited for) the slots have the default profile. `restore` changes nothing else, so it is safe to
+  # call from the netctl login too. A reboot puts every slot back in the
+  # default profile.
   flake.modules.nixos.guest-netctl =
     { config, pkgs, ... }:
 
@@ -61,6 +71,10 @@ in
       cfg = config.permafrost.netctl;
       slotCfg = config.permafrost.slots;
       netCfg = config.permafrost.network;
+
+      # The recorded profiles. The runtime directory of the helper outlives the
+      # process (RuntimeDirectoryPreserve), and /run does not outlive a boot.
+      statePath = "/run/permafrost-netctl/state.json";
 
       # The tables the helper may use, fixed at build time.
       table = pkgs.writeText "permafrost-netctl.json" (
@@ -72,6 +86,7 @@ in
           );
           profiles = lib.genAttrs (lib.attrNames netCfg.profiles) slots.uidSet;
           default = netCfg.defaultProfile;
+          state = statePath;
         }
       );
 
@@ -165,6 +180,54 @@ in
             return killed, supported
 
 
+        def save():
+            """Record the profile of every slot, as the kernel has it now."""
+            now = members()
+            state = {}
+            for slot, uid in CFG["slots"].items():
+                held = [p for p, u in now.items() if uid in u]
+                if len(held) == 1:
+                    state[slot] = held[0]
+            tmp = CFG["state"] + ".new"
+            with open(tmp, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, CFG["state"])
+
+
+        def restore():
+            try:
+                with open(CFG["state"]) as f:
+                    state = json.load(f)
+            except FileNotFoundError:
+                return "ok restore nothing"
+            now = members()
+            lines = []
+            moved = []
+            for slot, profile in sorted(state.items()):
+                # A slot or a profile that a deploy took away is not restored.
+                if slot not in CFG["slots"] or profile not in CFG["profiles"]:
+                    continue
+                uid = CFG["slots"][slot]
+                current = [p for p, u in now.items() if uid in u]
+                if current == [profile]:
+                    continue
+                lines += [f"delete element inet permafrost {CFG['profiles'][p]} {{ {uid} }}" for p in current]
+                lines.append(f"add element inet permafrost {CFG['profiles'][profile]} {{ {uid} }}")
+                moved.append((slot, uid, profile))
+            if not lines:
+                return "ok restore unchanged"
+            if not all(NFT_LINE.fullmatch(x) for x in lines):
+                raise Refused("internal")
+            # All slots in one transaction, as in change().
+            if run([NFT, "-f", "-"], "\n".join(lines) + "\n").returncode != 0:
+                raise Refused("apply")
+            killed = 0
+            for slot, uid, profile in moved:
+                killed += kill(uid)[0]
+                log(f"netctl restore slot={slot} uid={uid} to={profile}")
+            return f"ok restore slots={len(moved)} killed={killed}"
+
+
         def change(slot, new):
             uid = CFG["slots"][slot]
             current = [p for p, u in members().items() if uid in u]
@@ -177,6 +240,7 @@ in
             # One transaction: both lines or none.
             if run([NFT, "-f", "-"], "\n".join(lines) + "\n").returncode != 0:
                 raise Refused("apply")
+            save()
             killed, supported = kill(uid)
             old = ",".join(current) or "none"
             log(f"netctl set slot={slot} uid={uid} from={old} to={new} killed={killed}")
@@ -192,6 +256,8 @@ in
             parts = line.split(" ")
             if parts == ["list"]:
                 return "ok list default={} profiles={}".format(CFG["default"], ",".join(sorted(CFG["profiles"])))
+            if parts == ["restore"]:
+                return restore()
             if parts[0] == "get" and len(parts) == 2 and TOKEN.fullmatch(parts[1]):
                 slot = parts[1]
                 if slot not in CFG["slots"]:
@@ -251,6 +317,19 @@ in
 
         main()
       '';
+
+      # Asks the helper to apply the recorded profiles again. Root may connect to
+      # the socket, and the answer is checked, so a refused restore fails the
+      # unit and shows in `systemctl status`.
+      restoreScript = pkgs.writeShellApplication {
+        name = "permafrost-netctl-restore";
+        runtimeInputs = [ pkgs.socat ];
+        text = ''
+          reply=$(printf 'restore\n' | socat -t 30 - UNIX-CONNECT:${socketPath})
+          echo "$reply"
+          [[ $reply == "ok "* ]]
+        '';
+      };
 
       # The login shell of `netctl` and its ForceCommand.
       wrapperBase = pkgs.writeShellApplication {
@@ -346,40 +425,68 @@ in
             PermitUserRC no
         '';
 
-        systemd.sockets.permafrost-netctl = {
-          wantedBy = [ "sockets.target" ];
-          listenStreams = [ socketPath ];
-          socketConfig = {
-            SocketUser = "root";
-            SocketGroup = "netctl";
-            SocketMode = "0660";
-            Accept = false;
+        systemd = {
+          sockets.permafrost-netctl = {
+            wantedBy = [ "sockets.target" ];
+            listenStreams = [ socketPath ];
+            socketConfig = {
+              SocketUser = "root";
+              SocketGroup = "netctl";
+              SocketMode = "0660";
+              Accept = false;
+            };
           };
-        };
 
-        systemd.services.permafrost-netctl = {
-          description = "Network profile helper for the factory slots";
-          serviceConfig = {
-            ExecStart = "${helper}/bin/permafrost-netctl-helper";
-            SyslogIdentifier = "permafrost-netctl";
-            DynamicUser = true;
-            # nft sets and `ss -K` need this, and nothing else.
-            AmbientCapabilities = [ "CAP_NET_ADMIN" ];
-            CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
-            NoNewPrivileges = true;
-            ProtectSystem = "strict";
-            ProtectHome = true;
-            PrivateTmp = true;
-            PrivateDevices = true;
-            # Netlink for nft and ss, the unix socket for the client. No inet
-            # socket: a hijacked helper cannot reach the network.
-            RestrictAddressFamilies = [
-              "AF_UNIX"
-              "AF_NETLINK"
+          services.permafrost-netctl = {
+            description = "Network profile helper for the factory slots";
+            serviceConfig = {
+              ExecStart = "${helper}/bin/permafrost-netctl-helper";
+              SyslogIdentifier = "permafrost-netctl";
+              DynamicUser = true;
+              # nft sets and `ss -K` need this, and nothing else.
+              AmbientCapabilities = [ "CAP_NET_ADMIN" ];
+              CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
+              NoNewPrivileges = true;
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              PrivateTmp = true;
+              PrivateDevices = true;
+              # Netlink for nft and ss, the unix socket for the client. No inet
+              # socket: a hijacked helper cannot reach the network.
+              RestrictAddressFamilies = [
+                "AF_UNIX"
+                "AF_NETLINK"
+              ];
+              SystemCallFilter = [ "@system-service" ];
+              MemoryDenyWriteExecute = true;
+              LockPersonality = true;
+              # The recorded profiles, kept when the helper exits after ten idle
+              # seconds. Owned by the dynamic user, so nothing else writes it.
+              RuntimeDirectory = "permafrost-netctl";
+              RuntimeDirectoryMode = "0700";
+              RuntimeDirectoryPreserve = true;
+            };
+          };
+
+          # A reload of nftables.service deletes the table and loads it again, and
+          # every slot is then in the default profile. This puts them back.
+          # partOf carries a restart of nftables, ReloadPropagatedFrom a reload.
+          services.permafrost-netctl-restore = {
+            description = "Put the factory slots back on their network profile after nftables loads";
+            wantedBy = [ "multi-user.target" ];
+            after = [
+              "nftables.service"
+              "permafrost-netctl.socket"
             ];
-            SystemCallFilter = [ "@system-service" ];
-            MemoryDenyWriteExecute = true;
-            LockPersonality = true;
+            requires = [ "permafrost-netctl.socket" ];
+            partOf = [ "nftables.service" ];
+            unitConfig.ReloadPropagatedFrom = [ "nftables.service" ];
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              ExecStart = "${restoreScript}/bin/permafrost-netctl-restore";
+              ExecReload = "${restoreScript}/bin/permafrost-netctl-restore";
+            };
           };
         };
       };

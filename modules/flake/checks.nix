@@ -36,6 +36,67 @@ in
       slotCfg = guest.permafrost.slots;
       virtiofsdArgs = slotLib.virtiofsdArgs slotCfg;
       hostPathText = slotCfg.workspaces.hostPath;
+      hostCfg = host.permafrost.host.workspaces;
+      readerMountPoint = hostCfg.readerPath;
+
+      # What the id map says about every id, read from the flags. A rule is
+      # `type:a:b[:c]`: `map` is guest a to host b for c ids, `forbid-guest` is
+      # the guest ids a to a+b, `squash-host` is the host ids a to a+c.
+      pairsOf =
+        args:
+        let
+          go =
+            i:
+            lib.optional (i < lib.length args) {
+              flag = lib.elemAt args i;
+              rule = lib.splitString ":" (lib.elemAt args (i + 1));
+            }
+            ++ lib.optionals (i + 2 < lib.length args) (go (i + 2));
+        in
+        go 0;
+      rulesFor = flag: map (p: p.rule) (lib.filter (p: p.flag == flag) (pairsOf virtiofsdArgs));
+      num = lib.toInt;
+      # [ start end ) of each rule, on the guest side and on the host side.
+      guestRanges =
+        rules:
+        map (
+          r:
+          if lib.head r == "map" then
+            {
+              start = num (lib.elemAt r 1);
+              len = num (lib.elemAt r 3);
+            }
+          else
+            {
+              start = num (lib.elemAt r 1);
+              len = num (lib.elemAt r 2);
+            }
+        ) (lib.filter (r: lib.head r != "squash-host") rules);
+      hostRanges =
+        rules:
+        map (
+          r:
+          if lib.head r == "map" then
+            {
+              start = num (lib.elemAt r 2);
+              len = num (lib.elemAt r 3);
+            }
+          else
+            {
+              start = num (lib.elemAt r 1);
+              len = num (lib.elemAt r 3);
+            }
+        ) (lib.filter (r: lib.head r == "map" || lib.head r == "squash-host") rules);
+      # The ranges follow each other from 0 to the last id (2^32 - 1, which is
+      # not an id), with no gap and no overlap.
+      tiles =
+        ranges:
+        let
+          sorted = lib.sort (a: b: a.start < b.start) ranges;
+          step = acc: r: if acc == null || acc != r.start then null else r.start + r.len;
+          end = lib.foldl' step 0 sorted;
+        in
+        end == 4294967295;
       autostartOn = hostSystem.extendModules {
         modules = [ { permafrost.host.autostart = true; } ];
       };
@@ -44,6 +105,27 @@ in
       egress = lib.last (
         lib.splitString "chain egress {" guest.networking.nftables.tables.permafrost.content
       );
+      tableText = c: c.networking.nftables.tables.permafrost.content;
+      builderChain =
+        c:
+        lib.head (
+          lib.splitString "chain netctl_only {" (lib.last (lib.splitString "chain builders {" (tableText c)))
+        );
+      withProfiles =
+        profiles:
+        (guestSystem.extendModules { modules = [ { permafrost.network.profiles = profiles; } ]; }).config;
+      offline = withProfiles {
+        offline = {
+          title = "Offline";
+          internet.enable = false;
+        };
+      };
+      httpsOnly = withProfiles {
+        https-only = {
+          title = "HTTPS only";
+          internet.tcpPorts = [ 443 ];
+        };
+      };
       egressRules = lib.filter (l: l != "" && !(lib.hasPrefix "type filter hook" l) && l != "}") (
         map lib.trim (lib.splitString "\n" egress)
       );
@@ -80,8 +162,8 @@ in
                   message = "the fleet share does not carry the host path of the guest options";
                 }
                 {
-                  assertion = lib.length virtiofsdArgs == 12;
-                  message = "the flags are not six rules for the uid and the gid";
+                  assertion = lib.length virtiofsdArgs == 20;
+                  message = "the flags are not five rules for the uid and the gid";
                 }
                 {
                   assertion = guest.fileSystems.${slotLib.shareMount}.fsType == "virtiofs";
@@ -114,16 +196,180 @@ in
             }
             ''
               script=${self'.packages.permafrost}/bin/permafrost
-              # One line starts the virtiofsd of the share, with all six rules.
+              # One line starts the virtiofsd of the share, with all ten rules.
               line=$(grep -F -- '${slotLib.shareTag}.sock' "$script" | grep -F virtiofsd)
               test "$(printf '%s\n' "$line" | wc -l)" = 1
-              test "$(grep -o -- '--translate-' "$script" | wc -l)" = 6
+              test "$(grep -o -- '--translate-' "$script" | wc -l)" = 10
               ${lib.concatMapStringsSep "\n" (
                 a: "printf '%s' \"$line\" | grep -qF -- ${lib.escapeShellArg a}"
               ) virtiofsdArgs}
               printf '%s' "$line" | grep -qF -- '--shared-dir "${slotCfg.workspaces.hostPath}"'
               touch $out
             '';
+
+        # The id map covers every id once, on the guest side and on the host
+        # side: no gap that passes an id through unchanged, no overlap that
+        # virtiofsd would have to choose between. The flags are the same text
+        # for the uid and the gid. scripts/mapping-smoke.sh is the run against a
+        # real virtiofsd, and it needs sudo and /dev/kvm, so no flake check runs
+        # it; this is the part of it that a pure evaluation can hold.
+        workspaces-map-coverage = evalCheck "workspaces-map-coverage" [
+          {
+            assertion = tiles (guestRanges (rulesFor "--translate-uid"));
+            message = "the guest uid rules leave a gap or overlap: ${builtins.toJSON (rulesFor "--translate-uid")}";
+          }
+          {
+            assertion = tiles (hostRanges (rulesFor "--translate-uid"));
+            message = "the host uid rules leave a gap or overlap: ${builtins.toJSON (rulesFor "--translate-uid")}";
+          }
+          {
+            assertion = rulesFor "--translate-uid" == rulesFor "--translate-gid";
+            message = "the uid and gid rules differ";
+          }
+          {
+            # The slot ids map to host ids above the reader group, and the
+            # reader group itself is below them, so it is squashed.
+            assertion = lib.elem [
+              "map"
+              (toString (slotCfg.uidBase + 1))
+              (toString (slotCfg.workspaces.hostIdBase + 1))
+              (toString slotCfg.count)
+            ] (rulesFor "--translate-uid");
+            message = "the map rule is not the slot ids to the host ids";
+          }
+          {
+            assertion = slotCfg.workspaces.hostIdBase + slotCfg.count < slotLib.hostIdMax;
+            message = "the host ids of the slots reach the foreign range of systemd";
+          }
+        ];
+
+        # The host module as a real host has it: what the VM check stands in for
+        # with a copy. The mount of the reader and the tree are pinned here on
+        # the real configuration.
+        host-workspaces-config = evalCheck "host-workspaces-config" [
+          {
+            assertion = host.fileSystems ? ${readerMountPoint};
+            message = "the host has no mount for the reader";
+          }
+          {
+            assertion = lib.all (o: lib.elem o host.fileSystems.${readerMountPoint}.options) [
+              "bind"
+              "ro"
+              "nosymfollow"
+              "nosuid"
+              "nodev"
+            ];
+            message = "the reader mount lacks one of bind, ro, nosymfollow, nosuid, nodev";
+          }
+          {
+            assertion =
+              host.fileSystems.${readerMountPoint}.device == hostCfg.path
+              && host.fileSystems.${readerMountPoint}.fsType == "none";
+            message = "the reader mount is not a bind of the share directory";
+          }
+          {
+            # The same function builds the mount in the VM check, so the check
+            # tests what the host has.
+            assertion =
+              (slotLib.readerMount hostCfg).${readerMountPoint}.options
+              == host.fileSystems.${readerMountPoint}.options;
+            message = "the VM check mounts other options than the host has";
+          }
+          {
+            assertion = lib.elem "d ${hostCfg.path} 0750 root ${toString hostCfg.hostIdBase} - -" host.systemd.tmpfiles.rules;
+            message = "the share directory has no tmpfiles line 0750 root:readerGroup";
+          }
+          {
+            assertion = lib.all (
+              n:
+              lib.elem "d ${hostCfg.path}/${slotLib.name hostCfg n} 2750 ${toString (hostCfg.hostIdBase + n)} ${toString hostCfg.hostIdBase} - -" host.systemd.tmpfiles.rules
+            ) (lib.range 1 hostCfg.count);
+            message = "a slot directory has no tmpfiles line 2750 slot:readerGroup";
+          }
+          {
+            # Not RemainAfterExit: a start of the reader runs the check again.
+            assertion = !(host.systemd.services.permafrost-workspaces-ro-check.serviceConfig ? RemainAfterExit);
+            message = "the ro-check unit stays active after one run";
+          }
+          {
+            assertion = host.systemd.timers ? permafrost-workspaces-ro-check;
+            message = "no timer runs the ro-check again";
+          }
+        ];
+
+        # Confinement of the guest as the real guest has it.
+        confinement-config = evalCheck "confinement-config" [
+          {
+            # Builds may reach the public ports that every profile allows, and
+            # no more: one profile without internet takes them all away.
+            assertion = lib.hasInfix "tcp dport { 80, 443 } accept" (builderChain guest);
+            message = "the builders do not have public 80 and 443 with the default profile";
+          }
+          {
+            assertion = !lib.hasInfix "@reserved4 tcp dport" (builderChain offline);
+            message = "builds reach public ports although a profile has no internet";
+          }
+          {
+            assertion =
+              lib.hasInfix "@reserved4 tcp dport { 443 } accept" (builderChain httpsOnly)
+              && !(lib.hasInfix "80" (builderChain httpsOnly));
+            message = "builds reach more public ports than the narrowest profile";
+          }
+          {
+            # The builders still have the internal list and the resolvers.
+            assertion =
+              lib.hasInfix "@internal4_ports accept" (builderChain offline)
+              && lib.hasInfix "@resolvers4" (builderChain offline);
+            message = "the builders lost the internal list or the resolvers";
+          }
+          {
+            # An address that a NAT64 router turns into a LAN address is not
+            # public. Every transition prefix is reserved.
+            assertion = lib.all (p: lib.elem p guest.permafrost.network.reservedRanges.v6) [
+              "::ffff:0:0/96"
+              "64:ff9b::/96"
+              "64:ff9b:1::/48"
+              "2002::/16"
+              "2001::/32"
+            ];
+            message = "an IPv6 transition prefix is not reserved";
+          }
+          {
+            assertion =
+              let
+                g = guest.systemd.services.permafrost-egress-guard;
+              in
+              lib.elem "sshd.service" g.requiredBy
+              && lib.elem "sshd.service" g.before
+              && lib.elem "nftables.service" g.after
+              && lib.elem "nftables.service" g.requires;
+            message = "sshd does not wait for the egress guard, or the guard does not follow nftables";
+          }
+          {
+            assertion =
+              let
+                r = guest.systemd.services.permafrost-netctl-restore;
+              in
+              lib.elem "nftables.service" r.after
+              && lib.elem "nftables.service" r.partOf
+              && r.unitConfig.ReloadPropagatedFrom == [ "nftables.service" ]
+              && r.serviceConfig ? ExecReload;
+            message = "a reload or restart of nftables does not restore the profiles";
+          }
+          {
+            # The tailscaled socket is for root and the group tailscale: a slot
+            # has no such group, and agent has it.
+            assertion =
+              guest.systemd.services.tailscaled.serviceConfig.RuntimeDirectoryMode == "0750"
+              && lib.hasInfix "chgrp tailscale /run/tailscale" guest.systemd.services.tailscaled.serviceConfig.ExecStartPost
+              && lib.elem "tailscale" guest.users.users.agent.extraGroups;
+            message = "the tailscaled socket is open to every account";
+          }
+          {
+            assertion = lib.all (n: guest.users.users.${n}.extraGroups == [ ]) (slotLib.names slotCfg);
+            message = "a slot has a supplementary group";
+          }
+        ];
 
         # The host tree is made by a runner that is root, so every directory
         # goes through safe_dir first, and what is made is the directory and

@@ -327,7 +327,12 @@ pkgs.testers.runNixOSTest {
       };
 
     lan =
-      { config, lib, ... }:
+      {
+        config,
+        lib,
+        pkgs,
+        ...
+      }:
       {
         # The host of the workspaces: the module of a real host, with the
         # accounts that the tests act as.
@@ -362,6 +367,18 @@ pkgs.testers.runNixOSTest {
             8080
           ]
           // {
+            # The unit of a reader as stage 6 writes it: it requires the check of
+            # the mount and starts after it. The script asks whether that holds.
+            reader-stub = {
+              requires = [ "permafrost-workspaces-ro-check.service" ];
+              after = [ "permafrost-workspaces-ro-check.service" ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                ExecStart = "${pkgs.coreutils}/bin/true";
+              };
+            };
+
             udp-echo = {
               wantedBy = [ "multi-user.target" ];
               after = [ "network-addresses-eth1.service" ];
@@ -378,6 +395,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import json
     import shlex
+    from datetime import timedelta
 
     GUEST = "${guestIp}"
     guestIp6 = "${guestIp6}"
@@ -399,6 +417,14 @@ pkgs.testers.runNixOSTest {
             f"{SSH} {opts} -o ConnectTimeout={timeout} -i /root/id-{ident} "
             f"{user}@{GUEST} {shlex.quote(cmd)} < {stdin}"
         )
+
+
+    def denied(who, cmd, path):
+        # A refusal of the file system, not of the login: the command ran, and
+        # its own message names the path. A failed login is status 255, and
+        # says `Permission denied (publickey)` without the path.
+        status, out = site.execute(ssh(who, who, cmd + " 2>&1"))
+        assert status not in (0, 255) and "Permission denied" in out and path in out, (who, cmd, status, out)
 
 
     start_all()
@@ -525,18 +551,25 @@ pkgs.testers.runNixOSTest {
         assert guest.succeed("stat -c %a /home/slots").strip() == "711"
         for n in ["f-slot1", "f-slot2", "f-slot3"]:
             assert guest.succeed(f"stat -c %a /home/slots/{n}").strip() == "700"
-        site.fail(ssh("f-slot2", "f-slot2", "cat /home/slots/f-slot1/secret"))
-        site.fail(ssh("f-slot2", "f-slot2", "ls /home/slots/f-slot1"))
-        site.fail(ssh("f-slot2", "f-slot2", "ls /home/slots/f-slot1/tmp"))
-        site.fail(ssh("f-slot2", "f-slot2", "ls /home/slots/f-slot1/work"))
-        site.fail(ssh("f-slot2", "f-slot2", "touch /home/slots/f-slot1/x"))
+        # The owner does the same things to the same paths: what the others are
+        # refused is there, and the login works.
+        site.succeed(ssh("f-slot1", "f-slot1", "cat /home/slots/f-slot1/secret"))
+        for d in ["", "/tmp", "/work"]:
+            site.succeed(ssh("f-slot1", "f-slot1", f"ls /home/slots/f-slot1{d}"))
+        site.succeed(ssh("f-slot1", "f-slot1", "touch /home/slots/f-slot1/x && rm /home/slots/f-slot1/x"))
+        site.succeed(ssh("adurable", "adurable", "cat /home/adurable/secret && ls /home/adurable"))
+        denied("f-slot2", "cat /home/slots/f-slot1/secret", "/home/slots/f-slot1/secret")
+        denied("f-slot2", "ls /home/slots/f-slot1", "/home/slots/f-slot1")
+        denied("f-slot2", "ls /home/slots/f-slot1/tmp", "/home/slots/f-slot1/tmp")
+        denied("f-slot2", "ls /home/slots/f-slot1/work", "/home/slots/f-slot1/work")
+        denied("f-slot2", "touch /home/slots/f-slot1/x", "/home/slots/f-slot1/x")
         # Not listable at the top either.
-        site.fail(ssh("f-slot2", "f-slot2", "ls /home/slots"))
+        denied("f-slot2", "ls /home/slots", "/home/slots")
         # adurable and the slots are closed to each other, in both directions.
-        site.fail(ssh("adurable", "adurable", "cat /home/slots/f-slot1/secret"))
-        site.fail(ssh("adurable", "adurable", "ls /home/slots/f-slot1"))
-        site.fail(ssh("f-slot1", "f-slot1", "cat /home/adurable/secret"))
-        site.fail(ssh("f-slot1", "f-slot1", "ls /home/adurable"))
+        denied("adurable", "cat /home/slots/f-slot1/secret", "/home/slots/f-slot1/secret")
+        denied("adurable", "ls /home/slots/f-slot1", "/home/slots/f-slot1")
+        denied("f-slot1", "cat /home/adurable/secret", "/home/adurable/secret")
+        denied("f-slot1", "ls /home/adurable", "/home/adurable")
         # A slot has no way to the Nix daemon of root and no sudo.
         site.fail(ssh("f-slot1", "f-slot1", "type sudo"))
         site.succeed(ssh("f-slot1", "f-slot1", "grep -q '^CapEff:.0000000000000000$' /proc/self/status"))
@@ -567,19 +600,28 @@ pkgs.testers.runNixOSTest {
         site.succeed(ssh("f-slot2", "f-slot2", "echo two > ~/workspaces/two"))
         # Nobody else gets in: not a peer slot, not adurable, not even the slot
         # itself above its own home.
+        # Controls first: root reads the files through the share, and the owner
+        # through the home, by the absolute paths that the others are refused.
+        guest.succeed("cat ${slotLib.shareMount}/f-slot1/repo/file")
+        site.succeed(ssh("f-slot1", "f-slot1", "cat /home/slots/f-slot1/workspaces/repo/file && ls /home/slots/f-slot1/workspaces"))
+        site.succeed(ssh("f-slot2", "f-slot2", "cat /home/slots/f-slot2/workspaces/two"))
         for who in ["f-slot2", "adurable"]:
-            site.fail(ssh(who, who, "cat /home/slots/f-slot1/workspaces/repo/file"))
-            site.fail(ssh(who, who, "ls /home/slots/f-slot1/workspaces"))
-            site.fail(ssh(who, who, "ls ${slotLib.shareRoot}"))
-            site.fail(ssh(who, who, "ls ${slotLib.shareMount}"))
-            site.fail(ssh(who, who, "cat ${slotLib.shareMount}/f-slot1/repo/file"))
-        site.fail(ssh("f-slot1", "f-slot1", "ls ${slotLib.shareRoot}"))
-        site.fail(ssh("f-slot1", "f-slot1", "cat /home/slots/f-slot2/workspaces/two"))
-        site.fail(ssh("f-slot1", "f-slot1", "cat ${slotLib.shareMount}/f-slot2/two"))
-        # A slot that opens its own directory to everybody still hides it.
-        site.succeed(ssh("f-slot1", "f-slot1", "chmod 777 ~/workspaces"))
-        site.fail(ssh("f-slot2", "f-slot2", "cat /home/slots/f-slot1/workspaces/repo/file"))
-        site.fail(ssh("f-slot2", "f-slot2", "cat ${slotLib.shareMount}/f-slot1/repo/file"))
+            denied(who, "cat /home/slots/f-slot1/workspaces/repo/file", "/home/slots/f-slot1")
+            denied(who, "ls /home/slots/f-slot1/workspaces", "/home/slots/f-slot1")
+            denied(who, "ls ${slotLib.shareRoot}", "${slotLib.shareRoot}")
+            denied(who, "ls ${slotLib.shareMount}", "${slotLib.shareMount}")
+            denied(who, "cat ${slotLib.shareMount}/f-slot1/repo/file", "${slotLib.shareMount}")
+        denied("f-slot1", "ls ${slotLib.shareRoot}", "${slotLib.shareRoot}")
+        denied("f-slot1", "cat /home/slots/f-slot2/workspaces/two", "/home/slots/f-slot2")
+        denied("f-slot1", "cat ${slotLib.shareMount}/f-slot2/two", "${slotLib.shareMount}")
+        # A slot that opens its whole tree to everybody still hides it: the
+        # directory, the repository and the file are all readable by others
+        # now, so what stops slot 2 is the 0700 home above the bind mount and
+        # the 0700 directory above the share, and nothing in the tree.
+        site.succeed(ssh("f-slot1", "f-slot1", "chmod -R 777 ~/workspaces && chmod 644 ~/workspaces/repo/file"))
+        assert guest.succeed("stat -c %a /home/slots/f-slot1/workspaces /home/slots/f-slot1/workspaces/repo /home/slots/f-slot1/workspaces/repo/file").split() == ["777", "777", "644"]
+        denied("f-slot2", "cat /home/slots/f-slot1/workspaces/repo/file", "/home/slots/f-slot1")
+        denied("f-slot2", "cat ${slotLib.shareMount}/f-slot1/repo/file", "${slotLib.shareMount}")
 
     # --- Network access ------------------------------------------------------
 
@@ -740,10 +782,33 @@ pkgs.testers.runNixOSTest {
         assert "netctl set slot=f-slot1 uid=2001 from=lan-test to=internet-only killed=1" in journal, journal
         assert "netctl-ssh peer=${siteIp} accepted" in journal, journal
 
-    with subtest("a reload of the table puts every slot back on the default profile"):
+    with subtest("a reload or a restart of nftables keeps the profile of every slot"):
         assert netctl("set f-slot2 lan-test")[0] == 0
         assert members("uids_lan_test") == [2002]
+        reaches("f-slot2", lanIp, 8080)
+        # The reload deletes the table and loads it again. Without the restore
+        # unit, every slot would be on the default profile after it.
+        # The reload of the restore unit is queued by the reload of nftables and
+        # is not waited for by `systemctl reload`, so the script waits for the
+        # result and not for the unit.
+        def until(setname, uids):
+            retry(lambda _: members(setname) == uids, timeout=timedelta(seconds=30))
+
+        for how in ["reload", "restart"]:
+            guest.succeed(f"systemctl {how} nftables")
+            until("uids_lan_test", [2002])
+            assert members("uids_lan_test") == [2002], how
+            assert members("uids_internet_only") == [2001, 2003], how
+            reaches("f-slot2", lanIp, 8080)
+            rejected("f-slot1", lanIp, 8080)
+        journal = guest.succeed("journalctl -t permafrost-netctl --no-pager")
+        assert "netctl restore slot=f-slot2 uid=2002 to=lan-test" in journal, journal
+        # The restore is the helper's `restore`: no input, no other change.
+        assert netctl("restore")[1].strip() == "ok restore unchanged"
+        assert netctl("set f-slot2 internet-only")[0] == 0
         guest.succeed("systemctl reload nftables")
+        # Nothing is recorded to restore but the default profile for slot 2.
+        until("uids_internet_only", [2001, 2002, 2003])
         assert members("uids_lan_test") == []
         assert members("uids_internet_only") == [2001, 2002, 2003]
 
@@ -848,12 +913,18 @@ pkgs.testers.runNixOSTest {
     # --- Workspaces on the host ---------------------------------------------
 
     # The identity of a service that reads the workspaces, as the unit of the
-    # reader has it: a dynamic user, the group of the reader, the read-only
-    # view and nothing of the real directory.
+    # reader has it: a dynamic user, the group of the reader, and nothing of the
+    # real directory. No BindReadOnlyPaths here, on purpose: systemd would make
+    # the path read-only inside the unit, and every write below would fail for
+    # that reason and not for the mount of the module, which is the thing that
+    # is under test. DynamicUser implies ProtectSystem=strict, which has the
+    # same effect (and cannot be switched off), so the unit names the view in
+    # ReadWritePaths and the mount is the only barrier left. The subtest that
+    # makes the mount writable shows that a write then goes through.
     READER = (
         "systemd-run --quiet --wait --pipe --collect -p DynamicUser=yes "
         "-p SupplementaryGroups=permafrost-ws -p Environment=PATH=/run/current-system/sw/bin "
-        "-p BindReadOnlyPaths=/srv/permafrost-workspaces "
+        "-p ReadWritePaths=/srv/permafrost-workspaces "
         "-p InaccessiblePaths=/var/lib/permafrost-workspaces "
     )
     TREE = "/var/lib/permafrost-workspaces"
@@ -865,7 +936,7 @@ pkgs.testers.runNixOSTest {
 
 
     with subtest("the host tree has the owners and modes of the module"):
-        lan.wait_for_unit("permafrost-workspaces-ro-check.service")
+        lan.succeed("systemctl start permafrost-workspaces-ro-check.service")
         assert lan.succeed(f"stat -c '%a %u %g' {TREE}").strip() == "750 0 ${toString hostIdBase}"
         for n in [1, 2, 3]:
             assert lan.succeed(f"stat -c '%a %u %g' {TREE}/f-slot{n}").strip() == f"2750 {${toString hostIdBase} + n} ${toString hostIdBase}"
@@ -886,22 +957,30 @@ pkgs.testers.runNixOSTest {
             assert need in opts, (need, opts)
         assert lan.succeed(reader(f"cat {VIEW}/f-slot1/repo/file")).strip() == "hello"
         assert lan.succeed(reader(f"ls {VIEW}/f-slot1/repo")).strip() == "file"
-        # The real directory is not there for the reader at all.
-        lan.fail(reader(f"ls {TREE}"))
+        # The real directory is not there for the reader at all. The same unit
+        # reads the view in the line above, so the refusal is of the path.
+        status, out = lan.execute(reader(f"ls {TREE}") + " 2>&1")
+        assert status != 0 and TREE in out, (status, out)
+        # The kernel checks the mount before the mode for a create, a delete
+        # and a chmod, so these name the mount. An open for writing of a file
+        # that is 0640 for the group fails on the mode first, so that one only
+        # has to fail here; the subtest below gives it write bits and asks again.
+        status, out = lan.execute(reader(f"echo x >> {VIEW}/f-slot1/repo/file") + " 2>&1")
+        assert status != 0, out
         for cmd in [
-            f"echo x >> {VIEW}/f-slot1/repo/file",
             f"touch {VIEW}/f-slot1/repo/new",
             f"rm -f {VIEW}/f-slot1/repo/file",
             f"chmod 777 {VIEW}/f-slot1/repo/file",
         ]:
             status, out = lan.execute(reader(cmd) + " 2>&1")
-            assert status != 0, cmd
-        status, out = lan.execute(reader(f"touch {VIEW}/f-slot1/repo/new") + " 2>&1")
-        assert "Read-only file system" in out, out
+            assert status != 0 and "Read-only file system" in out, (cmd, status, out)
         assert lan.succeed(f"cat {TREE}/f-slot1/repo/file").strip() == "hello"
-        # An account outside the group does not even list the tree.
-        lan.fail(f"runuser -u outsider -- ls {TREE}")
-        lan.fail(f"runuser -u outsider -- ls {VIEW}")
+        # An account outside the group does not even list the tree. The reader
+        # account, which is in the group, lists the same view.
+        lan.succeed(f"runuser -u reader -- ls {VIEW}/f-slot1/repo")
+        for path in [TREE, VIEW]:
+            status, out = lan.execute(f"runuser -u outsider -- ls {path} 2>&1")
+            assert status != 0 and "Permission denied" in out and path in out, (path, status, out)
 
     with subtest("the mount, and not the mode, is the barrier"):
         # A slot owns its tree and can give the group of the reader write bits.
@@ -915,16 +994,29 @@ pkgs.testers.runNixOSTest {
             f"touch {VIEW}/f-slot1/repo/new",
             f"rm -f {VIEW}/f-slot1/repo/file",
             f"mkdir {VIEW}/f-slot1/repo/dir",
+            f"chmod 777 {VIEW}/f-slot1/repo/file",
         ]:
             status, out = lan.execute(reader(cmd) + " 2>&1")
             assert status != 0 and "Read-only file system" in out, (cmd, out)
         assert lan.succeed(f"cat {TREE}/f-slot1/repo/file").strip() == "hello"
-        # The unit that watches the mount fails when it is writable.
-        lan.succeed("systemctl is-active permafrost-workspaces-ro-check.service")
+        # Take the barrier away and the same write works, so the refusals above
+        # are the mount's and nothing else's.
+        lan.succeed("systemctl start reader-stub.service")
+        lan.succeed("systemctl stop reader-stub.service")
         lan.succeed(f"mount -o remount,bind,rw {VIEW}")
-        lan.fail("systemctl restart permafrost-workspaces-ro-check.service")
+        lan.succeed(reader(f"touch {VIEW}/f-slot1/repo/new-rw && rm {VIEW}/f-slot1/repo/new-rw"))
+        # The check fails on a writable mount, and so does the start of a unit
+        # that requires it (the reader of stage 6), every time and not once.
+        status, out = lan.execute("systemctl start permafrost-workspaces-ro-check.service 2>&1")
+        assert status != 0, out
+        assert "lacks ro" in lan.succeed("journalctl -u permafrost-workspaces-ro-check.service --no-pager -o cat")
+        status, out = lan.execute("systemctl start reader-stub.service 2>&1")
+        assert status != 0 and "dependency" in out.lower(), (status, out)
+        assert lan.execute("systemctl is-active reader-stub.service")[0] != 0
+        # Put the mount right again: the reader starts, and the write fails.
         lan.succeed(f"umount {VIEW} && mount {VIEW}")
-        lan.succeed("systemctl restart permafrost-workspaces-ro-check.service")
+        lan.succeed("systemctl start reader-stub.service")
+        lan.succeed("systemctl stop reader-stub.service")
         status, out = lan.execute(reader(f"touch {VIEW}/f-slot1/repo/new") + " 2>&1")
         assert status != 0 and "Read-only file system" in out, out
 
@@ -933,27 +1025,52 @@ pkgs.testers.runNixOSTest {
         lan.succeed(f"ln -s /etc/passwd {TREE}/f-slot1/repo/link")
         lan.succeed(f"chown -h {${toString hostIdBase} + 1}:${toString hostIdBase} {TREE}/f-slot1/repo/link")
         lan.succeed(f"cat {TREE}/f-slot1/repo/link")
-        lan.fail(reader(f"cat {VIEW}/f-slot1/repo/link"))
+        status, out = lan.execute(reader(f"cat {VIEW}/f-slot1/repo/link") + " 2>&1")
+        assert status != 0 and "Too many levels of symbolic links" in out, (status, out)
         assert lan.succeed(reader(f"readlink {VIEW}/f-slot1/repo/link")).strip() == "/etc/passwd"
+
+    def last_found():
+        out = lan.succeed("journalctl -t permafrost-ws-audit --no-pager -o cat")
+        return [x for x in out.splitlines() if x.startswith("found ")][-1]
+
 
     with subtest("the audit finds a file that no slot owns"):
         lan.succeed("systemctl start permafrost-workspaces-audit.service")
         journal = lan.succeed("journalctl -t permafrost-ws-audit --no-pager")
         assert "owner outside the slot ids" not in journal, journal
-        assert "found 0" in journal, journal
-        # A real account of the host in the share, and a file name that tries
-        # to start a line of its own in the journal. The second file belongs to
-        # root, so it is a finding too.
-        lan.succeed(f"chown 2001:2001 {TREE}/f-slot1/repo/file")
-        lan.succeed(f"touch \"{TREE}/f-slot1/repo/a\nFORGED-LINE\"")
+        assert last_found() == "found 0", journal
+        # Each bound of the audit has a file of its own, and the line names the
+        # owner it found: a real account of the host below the range (the uid
+        # and the gid of the account), a uid above the last slot, a gid above
+        # it, and a gid below the reader group. Then a file name that tries to
+        # start a line of its own in the journal; that file belongs to root, so
+        # it is a finding too. The count is that of the last run.
+        base = ${toString hostIdBase}
+        lan.succeed(
+            f"chown 2001:2001 {TREE}/f-slot1/repo/file",
+            f"install -m 0640 -o {base + 4} -g {base} /dev/null {TREE}/f-slot1/repo/uid-above",
+            f"install -m 0640 -o {base + 1} -g {base + 4} /dev/null {TREE}/f-slot1/repo/gid-above",
+            f"install -m 0640 -o {base + 1} -g 2001 /dev/null {TREE}/f-slot1/repo/gid-below",
+            f"touch \"{TREE}/f-slot1/repo/a\nFORGED-LINE\"",
+        )
         lan.succeed("systemctl start permafrost-workspaces-audit.service")
         journal = lan.succeed("journalctl -t permafrost-ws-audit --no-pager")
-        assert "owner outside the slot ids: 2001:2001 " + TREE + "/f-slot1/repo/file" in journal, journal
-        assert "owner outside the slot ids: 0:${toString hostIdBase} " + TREE + "/f-slot1/repo/a?FORGED-LINE" in journal, journal
-        assert "]: FORGED-LINE" not in journal, journal
-        assert "found 2" in journal, journal
-        lan.succeed(f"chown {${toString hostIdBase} + 1}:${toString hostIdBase} {TREE}/f-slot1/repo/file")
+        for owner, name in [
+            ("2001:2001", "file"),
+            (f"{base + 4}:{base}", "uid-above"),
+            (f"{base + 1}:{base + 4}", "gid-above"),
+            (f"{base + 1}:2001", "gid-below"),
+            (f"0:{base}", "a?FORGED-LINE"),
+        ]:
+            assert f"owner outside the slot ids: {owner} {TREE}/f-slot1/repo/{name}" in journal, (name, journal)
+        assert "FORGED-LINE" not in journal.replace("a?FORGED-LINE", ""), journal
+        assert last_found() == "found 5", journal
+        # What is inside the ids is not a finding: the files of slot 1 and 3.
+        lan.succeed(f"chown {base + 1}:{base} {TREE}/f-slot1/repo/file")
         lan.succeed(f"find {TREE}/f-slot1/repo -name 'a*' -delete")
+        lan.succeed(f"find {TREE}/f-slot1/repo \\( -name 'uid-*' -o -name 'gid-*' \\) -delete")
+        lan.succeed("systemctl start permafrost-workspaces-audit.service")
+        assert last_found() == "found 0"
 
     with subtest("the guard of the runner refuses a symlink and leaves what it points at"):
         lan.succeed(
@@ -966,6 +1083,14 @@ pkgs.testers.runNixOSTest {
         # for the link.
         lan.succeed(f"bash -c '. ${safeDir}; safe_dir {TREE}/f-slot1'")
         lan.succeed(f"bash -c '. ${safeDir}; safe_dir {TREE}/f-nothing'")
+        # A link higher up is the business of the host: the guard looks at the
+        # directory itself, and the realpath of a directory that is not a link
+        # is its parent's realpath and its name.
+        lan.succeed(f"ln -s {TREE} /root/treelink")
+        lan.succeed("bash -c 'set -e; . ${safeDir}; safe_dir /root/treelink/f-slot1'")
+        lan.succeed(f"ln -s {TREE}/f-slot1 /root/slotlink")
+        status, out = lan.execute("bash -c 'set -e; . ${safeDir}; safe_dir /root/slotlink' 2>&1")
+        assert status == 1 and "is a symlink" in out, (status, out)
         status, out = lan.execute(f"bash -c 'set -e; . ${safeDir}; safe_dir {TREE}/f-slot2; echo not-reached' 2>&1")
         assert status == 1 and "is a symlink" in out and "not-reached" not in out, (status, out)
         assert lan.succeed("stat -c '%a %u %g' /root/sentinel /root/sentinel/file") == before
@@ -974,14 +1099,38 @@ pkgs.testers.runNixOSTest {
         status, out = lan.execute(f"bash -c 'set -e; . ${safeDir}; safe_dir {TREE}/afile' 2>&1")
         assert status == 1 and "is not a directory" in out, (status, out)
 
+    def sshd_refused_while(guard):
+        # The guard is failed: sshd went down with it, and a start is refused.
+        # Both halves of the wiring are read from systemd as well.
+        assert guest.execute("systemctl is-active sshd.service")[0] != 0
+        status, out = guest.execute("systemctl start sshd.service 2>&1")
+        assert status != 0 and "dependency" in out.lower(), (status, out)
+        assert guest.execute("systemctl is-active sshd.service")[0] != 0
+        assert f"{guard}.service" in guest.succeed("systemctl show sshd.service -p Requires -p After")
+
+
     with subtest("sshd waits for the guard, and the guard fails while the share root is open"):
         guest.succeed("chmod 755 ${slotLib.shareRoot}")
         guest.fail("systemctl restart permafrost-factory-guard.service")
-        assert guest.fail("systemctl is-active sshd.service").strip() != "active"
+        sshd_refused_while("permafrost-factory-guard")
         guest.succeed("chmod 700 ${slotLib.shareRoot}")
         guest.succeed("systemctl restart permafrost-factory-guard.service")
         guest.succeed("systemctl start sshd.service")
         guest.wait_for_unit("sshd.service")
         assert site.succeed(ssh("f-slot1", "f-slot1", "id -un")).strip() == "f-slot1"
+
+    with subtest("sshd waits for the egress table, and the guard fails without it"):
+        # The table that did not load at boot: every slot would reach the LAN.
+        guest.succeed("systemctl is-active permafrost-egress-guard.service")
+        guest.succeed("nft delete table inet permafrost")
+        guest.fail("systemctl restart permafrost-egress-guard.service")
+        sshd_refused_while("permafrost-egress-guard")
+        assert "not loaded" in guest.succeed("journalctl -u permafrost-egress-guard.service --no-pager -o cat")
+        guest.succeed("systemctl restart nftables.service")
+        guest.succeed("systemctl restart permafrost-egress-guard.service")
+        guest.succeed("systemctl start sshd.service")
+        guest.wait_for_unit("sshd.service")
+        assert site.succeed(ssh("f-slot1", "f-slot1", "id -un")).strip() == "f-slot1"
+        rejected("f-slot1", lanIp, 80)
   '';
 }

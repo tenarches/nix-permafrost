@@ -186,8 +186,12 @@ the read-only mount on the host stops the reader from writing.
 of the guest. The rules decide by the uid of the socket owner, by destination and by port. The
 NixOS firewall table stays as it is (`networking.nftables.tables` is used, not `ruleset`, and
 `flushRuleset` is `false`). Every slot starts in the default profile, and `netctl` moves a slot
-to another one (see the next section). Nothing is stored: a reboot, or `systemctl reload
-nftables`, puts every slot back in the default profile.
+to another one (see the next section). The profile of each slot is kept in `/run`, so it lasts
+until a reboot, which puts every slot back in the default profile. A reload or restart of
+`nftables.service` deletes and loads the table again; `permafrost-netctl-restore.service` then
+applies the recorded profiles again (the slots have the default profile for a short time in between). The table fails closed: `permafrost-egress-guard.service` runs before sshd and fails
+unless the chain `egress` is loaded and jumps to `confined`, so a ruleset that did not load leaves
+the guest without a login, and the serial console is the way in.
 
 The options are under `permafrost.network`:
 
@@ -200,7 +204,7 @@ The options are under `permafrost.network`:
 | `defaultProfile` | `internet-only` | The profile of every slot after a boot. |
 | `internal.<name>` | `{}` | Hosts that every profile may reach, by address: `{ addresses; tcpPorts; allPorts; }`. `tcpPorts` is required unless `allPorts = true`, and the two do not go together. |
 | `resolvers` | `permafrost.identity.nameservers` | The resolvers a slot may ask, on port 53. |
-| `reservedRanges.v4`, `.v6` | loopback, private, CGNAT, link-local, multicast, unique-local | The ranges that are not the internet. |
+| `reservedRanges.v4`, `.v6` | loopback, private, CGNAT, link-local, multicast, unique-local; for IPv6 also the prefixes that carry an IPv4 address (`::ffff:0:0/96`, `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`) | The ranges that are not the internet. A NAT64 address such as `64:ff9b::c0a8:105` is the LAN host `192.168.1.5`, so it is not public. |
 | `slotLoopback` | `reject` | `reject` stops a slot from connecting to any address of the guest. `allow` takes the rule out. |
 
 The internal list is addresses, not names. nftables resolves a name when it loads the rules, and
@@ -233,9 +237,13 @@ there.
 Two more groups are confined, because both would be a way round the profile of a slot:
 
 - **The Nix build users** (group `nixbld`). The fetch of a fixed-output derivation has network
-  access, and a slot may start one. These get the declared resolvers, the internal list and
-  public ports 80 and 443, never a LAN host, whatever the profile of the slot is. A fetch from a
-  LAN host inside `nix build` fails, also for a slot on a LAN profile.
+  access, and a slot may start one. The rules cannot tell which slot asked for the build, so these
+  get the declared resolvers, the internal list and the public ports that every declared profile
+  allows: the narrowest profile sets the limit, and one profile with `internet.enable = false`
+  takes the public ports away from all builds. They never reach a LAN host. A fetch from a LAN
+  host inside `nix build` fails, also for a slot on a LAN profile. With the default profile
+  alone, a build reaches public 80 and 443. The check `confinement-config` evaluates the table
+  with a profile without internet and with a profile for port 443 only.
 - **`netctl`**. The internal list and the resolvers only.
 
 Everyone else is not filtered: `root`, the daemons, `agent` and `adurable` fall through the
@@ -277,6 +285,7 @@ The grammar is one line of at most 64 characters from `a-z 0-9 -` and single spa
 | `list` | `ok list default=<profile> profiles=<p1>,<p2>,...` |
 | `get <slot>` | `ok get slot=f-slot3 uid=2003 profile=<profile>` |
 | `set <slot> <profile>` | `ok set slot=f-slot3 uid=2003 from=<old> to=<new> killed=<n>`, or `... profile=<p> unchanged` |
+| `restore` | `ok restore slots=<n> killed=<k>`, `ok restore unchanged`, or `ok restore nothing`. Applies the recorded profiles again. `permafrost-netctl-restore.service` calls it after `nftables.service` loads. |
 
 No verb takes a host, a port, an address or a uid. The slot and the profile are looked up in a table
 that is written at build time, and the nft text is a fixed template with one number in it. A
@@ -341,23 +350,27 @@ Layout, and the path rule that pi-durable uses:
 
 **Ids.** The slot `f-slotN` has uid and gid `2000 + N` in the guest and writes as host uid and
 gid `2000000000 + N` (`permafrost.slots.workspaces.hostIdBase`). The range is above the
-container ids of systemd (`0x70000000`) and below 2^31, so no account of a host has one of
-those numbers, and no real host user owns a file of a slot. The map is made by virtiofsd
-(`--translate-uid` and `--translate-gid`, no user namespace): three rules for the uid and the
-same three for the gid, as written by `virtiofsdArgs`:
+container ids of systemd (`0x70000000`) and below its foreign range (`0x7FFF0000`; the
+option type keeps `hostIdBase + count` under it), so no account of a host has one of those
+numbers, and no real host user owns a file of a slot. The map is made by virtiofsd
+(`--translate-uid` and `--translate-gid`, no user namespace): five rules for the uid and the
+same five for the gid, as written by `virtiofsdArgs`:
 
 | Flag value | Meaning |
 |---|---|
 | `map:2001:2000000001:16` | Guest ids 2001 to 2016 are host ids 2000000001 to 2000000016, both ways. |
 | `forbid-guest:0:2001` | A guest id from 0 to 2000 cannot create a file or take a file as owner. |
 | `forbid-guest:2017:4294965278` | The same for every id above the slot range. |
+| `squash-host:0:65534:2000000001` | Host ids 0 to 2000000000 (root, every real account, the reader group) show in the guest as 65534, nobody. |
+| `squash-host:2000000017:65534:2294967278` | The same for every host id above the slot range. |
 
 Only slots create files in the share. Guest root, `agent`, `adurable` and `netctl` cannot create
 a file or `chown` one into a foreign id, so a file of the guest root never lands on the host.
 `--posix-acl` cannot be used with the map, so the fleet share has `posixAcl = false` and there
-are no ACLs or xattrs in the share. Ids outside the map show unchanged, so a host file owned by
-a real uid from 2001 to 2016 would show in the guest as a slot's file. Nothing like it exists
-unless a host user puts it there, and the audit unit (below) finds it.
+are no ACLs or xattrs in the share. A host id outside the map shows in the guest as nobody, so a
+host file owned by a real uid from 2001 to 2016 does not show as a slot's file. The audit unit
+(below) still finds such a file. The check `workspaces-map-coverage` holds that the rules cover
+every id once on both sides; `scripts/mapping-smoke.sh` runs them against a real virtiofsd.
 
 **Modes.** `<hostPath>` is `root:2000000000 0750`. Each `<hostPath>/f-slotN` is
 `2000000000+N:2000000000 2750` (setgid), so a file a slot makes gets the group `2000000000`,
@@ -407,18 +420,27 @@ configuration, so the check `workspaces-ids-agree` compares the two sets of defa
   which gives the reader group write bits; the read-only mount is what stops the write. So
   the group has one kind of member, the service that reads the workspaces, and that service
   reaches the data only through `readerPath` (`BindReadOnlyPaths` and `InaccessiblePaths = [ path ]`
-  in its unit). The unit `permafrost-workspaces-ro-check.service` fails when `findmnt` does not
-  show `ro`, `nosymfollow` and `nosuid`, and the unit of the reader orders itself after it.
+  in its unit). The unit `permafrost-workspaces-ro-check.service` fails when `findmnt` shows no mount or does
+  not show `ro`, `nosymfollow` and `nosuid`. It is not `RemainAfterExit`, so each start of a unit
+  that has `Requires=` and `After=` on it runs the check again and a failed check stops that
+  start. The unit of the reader MUST declare both (`After=` alone does not stop a start after a
+  failure). A timer runs the check every minute, so a mount that was made writable later shows as a
+  failed unit.
 - **Audit.** `permafrost-workspaces-audit.service` runs daily (and can be started by hand),
   tag `permafrost-ws-audit`. It writes one warning for each file whose owner is outside
   `hostIdBase+1` to `hostIdBase+count`, or whose group is outside `hostIdBase` to
   `hostIdBase+count`, and a last line `found <n>`. It changes nothing. File names are passed through
   `tr`, so a name cannot start a log line.
 - **Reader unit (not in this repository).** `services.nix-skills-mcp.readOnlyPaths = [ "/srv/permafrost-workspaces" ]`
-  and `SupplementaryGroups = [ "permafrost-ws" ]` belong to the host configuration. git can
-  refuse a repository there with "dubious ownership", because the owner is a number that the
-  service user does not have. The service needs `safe.directory = *`, for example
-  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=*`.
+  and `SupplementaryGroups = [ "permafrost-ws" ]` belong to the host configuration. git
+  refuses a repository there with "dubious ownership", because the owner is a number that the
+  service user does not have, and that is the right answer: **do not set `safe.directory`**. A slot
+  writes `.git/config` and the hooks of its tree, and git runs `core.fsmonitor`, `core.sshCommand`,
+  `core.pager` and `uploadpack.packObjectsHook` from there, as the reader, which holds the group
+  read on every slot. The ownership check is the only thing in the way. A reader that must run git
+  uses `-c core.fsmonitor= -c core.hooksPath=/dev/null`, `GIT_CONFIG_GLOBAL=/dev/null` and
+  `GIT_CONFIG_NOSYSTEM=1`, which is a deny list of today's keys; a parser that reads the tree and
+  does not run git is the better way.
 - **Quota.** The share has no quota. On a host with ZFS the path should be its own dataset
   with `quota`.
 

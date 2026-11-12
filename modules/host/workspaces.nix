@@ -26,15 +26,29 @@ in
   #   reads the workspaces (the `nix_verify` service of pi-durable), and that
   #   service reaches the data through `readerPath` and not through `path`
   #   (`InaccessiblePaths` and `BindReadOnlyPaths` in its unit);
-  # - permafrost-workspaces-ro-check fails when the mount has lost `ro`,
-  #   `nosymfollow` or `nosuid`, and the reader unit orders itself after it.
+  # - permafrost-workspaces-ro-check fails when the mount is missing or has lost
+  #   `ro`, `nosymfollow` or `nosuid`. It is not RemainAfterExit, so every start
+  #   of a unit that has `Requires=` and `After=` on it runs the check again, and
+  #   a failed check stops that start. The reader unit MUST declare both. A
+  #   timer runs the check every minute and shows a mount that was remounted
+  #   writable later; `After=` alone would not stop the reader.
+  #
+  # The reader must not run git on these trees with the repository's own
+  # configuration. A slot writes `.git/config` and the hooks, and git runs
+  # `core.fsmonitor`, `core.sshCommand`, `core.pager` and
+  # `uploadpack.packObjectsHook` from there, as the reader. So there is no
+  # `safe.directory`: with it, the one ownership check that git has is gone. A
+  # reader that needs git runs it with `-c core.fsmonitor= -c
+  # core.hooksPath=/dev/null`, `GIT_CONFIG_GLOBAL=/dev/null` and
+  # `GIT_CONFIG_NOSYSTEM=1`. That is a deny list of the keys that are known
+  # today, and `.git/config` still supplies the rest, so a parser that reads
+  # the tree and does not run git is the better way. "dubious ownership" is the
+  # right answer for a tree that the reader does not own.
   #
   # Not closed: a slot can `chmod 700` its tree and hide it from the reader,
   # which then fails and reads nothing wrong. The reader mount does not follow
-  # symlinks, so `nix_verify` cannot follow one inside a repository. git may
-  # refuse a repository there ("dubious ownership"), because its owner is a
-  # number that the reader does not have; the reader sets `safe.directory`. The
-  # share has no quota: the directory should be a dataset with one.
+  # symlinks, so `nix_verify` cannot follow one inside a repository. The share
+  # has no quota: the directory should be a dataset with one.
   flake.modules.nixos.host-workspaces =
     {
       config,
@@ -90,7 +104,7 @@ in
         };
 
         hostIdBase = lib.mkOption {
-          type = lib.types.ints.between 1879048192 2147483000;
+          type = lib.types.ints.between slots.hostIdMin (slots.hostIdMax - 100);
           default = slots.defaults.hostIdBase;
           description = ''
             Slot n owns its directory as uid and gid `hostIdBase + n`, and the
@@ -145,13 +159,17 @@ in
                 wantedBy = [ "multi-user.target" ];
                 unitConfig.RequiresMountsFor = cfg.readerPath;
                 path = [ pkgs.util-linux ];
-                serviceConfig = {
-                  Type = "oneshot";
-                  RemainAfterExit = true;
-                };
+                # Not RemainAfterExit: the unit is inactive after it ran, so a
+                # unit that requires it starts it, and so checks the mount, on
+                # each of its own starts.
+                serviceConfig.Type = "oneshot";
                 script = ''
                   # The last line is the mount on top.
                   seen=$(findmnt -n -o OPTIONS --mountpoint ${lib.escapeShellArg cfg.readerPath} | tail -n 1)
+                  if [ -z "$seen" ]; then
+                    echo "${cfg.readerPath} is not a mount point" >&2
+                    exit 1
+                  fi
                   for need in ro nosymfollow nosuid; do
                     case ",$seen," in
                       *",$need,"*) ;;
@@ -199,6 +217,11 @@ in
                   echo "found $found"
                 '';
               };
+            };
+
+            timers.permafrost-workspaces-ro-check = {
+              wantedBy = [ "timers.target" ];
+              timerConfig.OnCalendar = "minutely";
             };
 
             timers.permafrost-workspaces-audit = {

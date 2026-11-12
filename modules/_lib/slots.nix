@@ -13,10 +13,17 @@ rec {
     hostPath = "/var/lib/permafrost-workspaces";
     readerPath = "/srv/permafrost-workspaces";
     readerGroup = "permafrost-ws";
-    # Above systemd's container range (0x70000000) and below 2^31, so no
-    # passwd entry on a host has one of these numbers.
+    # Between systemd's container range and its foreign range (hostIdMin and
+    # hostIdMax below), so no passwd entry on a host has one of these numbers.
     hostIdBase = 2000000000;
   };
+
+  # The ids of a host that slots may map to: above systemd's container range
+  # (0x70000000 = 1879048192) and below its foreign range (0x7FFF0000, the first
+  # id there). `hostIdBase + count` must stay under the second bound, and count
+  # is 99 at most, so the base goes up to `hostIdMax - 100`.
+  hostIdMin = 1879048192;
+  hostIdMax = 2147352576;
 
   # Slot numbers run from 1, so the account of slot 3 is f-slot3.
   name = cfg: n: "${cfg.userPrefix}${toString n}";
@@ -52,11 +59,18 @@ rec {
   # or of agent. Reads and writes of files that exist are not refused, because
   # virtiofsd acts with its own rights once the guest kernel has allowed the
   # call. The map cannot be used with --posix-acl.
+  #
+  # The other direction is closed too. A host id outside the map would reach the
+  # guest unchanged, so a host file owned by uid 2003 would belong to slot 3.
+  # Every host id outside the slot ids is shown as nobody (65534) instead, the
+  # reader group and host root included.
   virtiofsdArgs =
     cfg:
     let
       first = cfg.uidBase + 1;
       after = cfg.uidBase + cfg.count + 1;
+      hostFirst = cfg.workspaces.hostIdBase + 1;
+      hostAfter = cfg.workspaces.hostIdBase + cfg.count + 1;
       rules = flag: [
         flag
         "map:${toString first}:${toString (cfg.workspaces.hostIdBase + 1)}:${toString cfg.count}"
@@ -64,6 +78,10 @@ rec {
         "forbid-guest:0:${toString first}"
         flag
         "forbid-guest:${toString after}:${toString (4294967295 - after)}"
+        flag
+        "squash-host:0:65534:${toString hostFirst}"
+        flag
+        "squash-host:${toString hostAfter}:65534:${toString (4294967295 - hostAfter)}"
       ];
     in
     rules "--translate-uid" ++ rules "--translate-gid";
