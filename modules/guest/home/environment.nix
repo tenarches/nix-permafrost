@@ -14,6 +14,11 @@
           inputs.devenv.packages.${pkgs.stdenv.hostPlatform.system}.devenv
           pkgs.uv
           pkgs.nodejs
+          # The linters of this repository's own pre-commit hooks
+          # (flake/pre-commit.nix). Agents ran each through `nix run` when absent.
+          pkgs.nixfmt
+          pkgs.statix
+          pkgs.deadnix
         ];
       };
 
