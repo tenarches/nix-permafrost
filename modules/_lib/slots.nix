@@ -25,4 +25,19 @@ rec {
 
   # Every slot name, 1..count.
   names = cfg: builtins.genList (i: name cfg (i + 1)) cfg.count;
+
+  # The one account that may change the network profile of a slot, through the
+  # helper of guest/netctl.nix. The egress table (guest/network-egress.nix)
+  # confines it as well, so both modules need the number.
+  netctl = {
+    name = "netctl";
+    uid = 1002;
+  };
+
+  # The name of a profile inside nft identifiers: the profile names allow `-`,
+  # nft identifiers do not.
+  profileId = profile: builtins.replaceStrings [ "-" ] [ "_" ] profile;
+
+  # The nft set that holds the uids of the slots on one profile.
+  uidSet = profile: "uids_${profileId profile}";
 }

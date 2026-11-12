@@ -208,6 +208,29 @@ The host's bridge network (`modules/host/bridge.nix`) matches `matchConfig.Name 
 the tap as `microvm-${tapId}` for both launch paths, so a tap named anything else would be
 created and then never bridged in.
 
+### Network access inside the guest
+
+The guest filters what its factory slots send, not what arrives. One nftables table, `inet
+permafrost` (`modules/guest/network-egress.nix`), has a chain in the output hook. The chain holds
+three jumps and no other rule, chosen by the owner of the socket:
+
+```mermaid
+graph LR
+    OUT["packet leaves the guest"] --> E["chain egress<br/>policy accept"]
+    E -->|"uid in slot_uids"| C["confined<br/>reply, resolvers, local,<br/>internal list, profile, reject"]
+    E -->|"gid nixbld"| B["builders<br/>no LAN, public 80 and 443"]
+    E -->|"uid netctl"| N["netctl_only<br/>internal list only"]
+    E -->|"anyone else"| A["accept"]
+    C -->|"uid in uids_P"| P["profile_P<br/>LAN hosts and ports,<br/>public ports"]
+```
+
+A slot is in the uid set of exactly one profile. The helper of `netctl`
+(`modules/guest/netctl.nix`) is reached over ssh as the login `netctl`, through a forced command
+and a unix socket that only that group can open. It moves the uid of a slot from one set to
+another in one nft transaction and then closes the open TCP connections of that slot. The sets are
+only in the kernel, so a reboot puts every slot back in the default profile. The rules, the
+options and the protocol are in the [reference](reference.md#network-access).
+
 ---
 
 ## Guest Storage Architecture
