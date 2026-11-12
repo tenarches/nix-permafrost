@@ -90,12 +90,14 @@ its own shares.*
 
 ## Guest accounts
 
-The guest has two logins that run commands. Both are declared in `modules/guest/`.
+The guest has two logins that run commands, and one more login for each factory slot. All
+are declared in `modules/guest/`.
 
 | Account | uid / gid | Home | Reaches the host through | Login |
 |---|---|---|---|---|
 | `agent` | 1000 / `users` | `/home/agent`, the `home.img` volume | the shares under `/mnt/persist`, linked into its home | serial console, ssh with the launching user's keys, ssh with a CA certificate |
 | `adurable` | 1001 / 1001 (`adurable`) | `/home/adurable`, the `adurable-home.img` volume | nothing | ssh with a CA certificate only |
+| `f-slot1` to `f-slotN` | 2001 and up / the same number, group of the same name | `/home/slots/f-slotN`, on the `slots-home.img` volume | nothing | ssh with a CA certificate only |
 
 `agent` is the account of the owner's harnesses (`modules/harness/*.nix`). Their sign-in
 files are the virtiofs shares, and the launch credentials are in `/run/launch`. Anything
@@ -124,8 +126,53 @@ commands as:
   daemon. `trusted-users` stays `root`. `git`, `bash` and `nix` are on its `PATH` from the
   system packages.
 
-Not done: `/proc` is not mounted with `hidepid`, so `adurable` can list the processes of
-`agent`. NixOS removed its `security.hideProcessInformation` module because the mount option
+### Slot accounts
+
+`modules/guest/slots.nix` makes one account for each factory slot. pi-durable runs the
+commands of one factory as one slot, so two factories that read untrusted text in the same
+guest cannot read each other's files. The options are under `permafrost.slots`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `count` | `16` (1 to 99) | The number of accounts, `<userPrefix>1` to `<userPrefix><count>`. |
+| `userPrefix` | `f-slot` | The start of every account name. |
+| `uidBase` | `2000` | Slot n has uid and gid `uidBase + n`. |
+| `homeRoot` | `/home/slots` | The mount point of the one volume that holds every slot home. |
+| `homeVolumeSizeMiB` | `131072` | The size of that volume. It is sparse, so this is a cap. |
+
+- **Login.** As for `adurable`: no key, no password (locked). `AuthorizedKeysFile none`,
+  `AuthorizedPrincipalsFile none` and no forwarding of any kind (agent, TCP, stream-local,
+  X11, tunnel, `~/.ssh/rc`) apply to each slot in its own `Match User` block. A certificate
+  logs in as the slot when one of its principals is the account name, so a certificate for
+  `f-slot1` does not log in as `f-slot2`, `adurable` or `root`. The `Match` blocks and the
+  `adurable` block use `lib.mkAfter`: a global line that another module adds at the default
+  order stays above every block.
+- **No groups.** The primary group of a slot has the name of the slot, and nothing else is in
+  it. A slot is in none of `users`, `video`, `render`, `systemd-journal` and `wheel`.
+- **Home.** `/home/slots/f-slotN` is on `slots-home.img`, one volume for all slots, recreated
+  on every boot. Each home is mode 0700, and `/home/slots` is 0711, so a slot can reach its
+  own home and cannot list the others. `tmpfiles` creates `tmp` and `work` in it. Nothing a
+  slot writes there reaches the host.
+- **TMPDIR.** `/tmp` is one shared volume. The `Match` block of each slot sets
+  `TMPDIR=/home/slots/f-slotN/tmp`, so the commands of an ssh session do not put their files
+  in `/tmp`. This is why the blocks are written one for each slot: `SetEnv` does not expand `%u`.
+- **umask.** An ssh session of an account like `adurable` runs with umask 0022. For slot uids
+  only, a `pam_umask` rule on the `sshd` and `login` services sets 0027, and a drop-in sets
+  `UMask=0027` on `user@<uid>.service` of each slot, for the `systemd --user` units that do not
+  pass through sshd. A file of a slot has mode 0640 and a directory 0750.
+- **Tooling.** Each slot gets the Home Manager module `agent-environment` and nothing else
+  (`devenv`, `uv`, `nodejs` and the Nix linters), as `adurable` does. This adds one
+  `home-manager-f-slotN.service` for each slot at boot. The cost is not measured.
+- **Nix.** `nix.settings.allowed-users` lists the slots. `trusted-users` stays `root`.
+
+Not done: a slot can list the processes of the other accounts (see below). `/tmp` is shared,
+and only ssh sessions get the `TMPDIR` above. There is no CPU, memory or disk limit for a
+slot, and a slot that fills `slots-home.img` starves the others. Unix sockets (abstract ones
+too) and the Nix store are shared between all accounts. The guest has no rule yet that stops
+a slot from reaching the network or the other slots over TCP.
+
+Not done: `/proc` is not mounted with `hidepid`, so `adurable` and the slots can list the
+processes of `agent` and of each other, with their command lines. NixOS removed its `security.hideProcessInformation` module because the mount option
 breaks cgroups v2 session tracking, and systemd does not support it as a global setting.
 It needs a boot test of the guest before it is added.
 

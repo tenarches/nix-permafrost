@@ -28,7 +28,7 @@
   # - The Nix daemon accepts it as a client but it is not a trusted user, as
   #   `agent` is not (see base.nix): a trusted user is root-equivalent.
   flake.modules.nixos.guest-adurable =
-    { config, ... }:
+    { config, lib, ... }:
     {
       users = {
         groups.adurable.gid = 1001;
@@ -60,9 +60,12 @@
       # /etc/ssh/authorized_keys.d are only ever written for agent. For this
       # account both are switched off, so a certificate is the one way in. Agent
       # forwarding is off too: the owner's agent must not be reachable from a
-      # session that reads untrusted text. A Match block runs to the end of the
-      # file, and extraConfig is the last thing in sshd_config.
-      services.openssh.extraConfig = ''
+      # session that reads untrusted text. A Match block runs to the next Match
+      # or the end of the file, and extraConfig is the last thing in
+      # sshd_config. mkAfter keeps the block below every global line that
+      # another module adds there at the default order (the slot accounts in
+      # slots.nix do the same).
+      services.openssh.extraConfig = lib.mkAfter ''
         Match User adurable
           AuthorizedKeysFile none
           AllowAgentForwarding no

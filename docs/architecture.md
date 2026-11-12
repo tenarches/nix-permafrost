@@ -213,7 +213,7 @@ created and then never bridged in.
 ## Guest Storage Architecture
 
 Every writable path in the guest is a sparse disk image on the host, destroyed and recreated
-on every boot. Only `/` remains RAM-backed. All five volumes are declared in one place,
+on every boot. Only `/` remains RAM-backed. All six volumes are declared in one place,
 `modules/guest/base.nix`.
 
 | # | Image | Mount | Filesystem | Size | Device |
@@ -223,6 +223,7 @@ on every boot. Only `/` remains RAM-backed. All five volumes are declared in one
 | 2 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
 | 3 | `swap.img` | *(raw)* | — | 8 GiB | `/dev/vdd` |
 | 4 | `adurable-home.img` | `/home/adurable` | btrfs + `compress=zstd:1` | 32 GiB | `/dev/vde` |
+| 5 | `slots-home.img` | `/home/slots` | btrfs + `compress=zstd:1` | 128 GiB | `/dev/vdf` |
 
 `storeOnDisk` is `false` (the Nix store is a virtiofs share), so `withDriveLetters` applies
 no offset and letters follow list order. The swap letter is **derived** via microvm.nix's own
@@ -233,6 +234,13 @@ home of the `adurable` account (see [Guest accounts](reference.md#guest-accounts
 disk volume and not a share: `preStart` and `ExecStopPost` already remove every `*.img` in
 the state directory, so it needs no code of its own in the runner, and nothing `adurable`
 writes reaches the host.
+
+`slots-home.img` is also last. It holds the homes of all factory slot accounts (see
+[Slot accounts](reference.md#slot-accounts)), one volume for all of them: sixteen volumes would
+use sixteen drive letters, sixteen `mkfs` on every boot and sixteen disks in `microvm-run`. The
+cost is that one slot that fills it starves the others. The size is the option
+`permafrost.slots.homeVolumeSizeMiB` and the mount point is `permafrost.slots.homeRoot`. Like
+`adurable-home.img` it is a disk volume and not a share, and the runner has no code for it.
 
 ### Why this shape
 

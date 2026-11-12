@@ -115,6 +115,9 @@ Follow these on every task, every commit:
    ```
    This evaluates the full module tree for all hosts. Must pass green.
 
+   The slot accounts have a VM check, which `nix flake check` runs without
+   `--no-build`: `nix build .#checks.x86_64-linux.vm-slots -L`.
+
 6. **Honest uncertainty.** If you cannot confirm a change is behavior-preserving,
    stop and report. A blocked task accurately described is better than a silently
    broken configuration.

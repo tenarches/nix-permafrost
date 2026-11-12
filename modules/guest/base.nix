@@ -14,6 +14,7 @@
 
     let
       cfg = config.permafrost.identity;
+      slotsCfg = config.permafrost.slots;
 
       # Per-VM host-side directory holding this guest's ephemeral disk images.
       stateDir = "/var/lib/permafrost/${cfg.name}";
@@ -87,6 +88,21 @@
           fsType = "btrfs";
           label = "adurable-home";
           size = 32768; # 32 GiB
+          autoCreate = true;
+        }
+        {
+          # One volume for the homes of all factory slots (see guest/slots.nix),
+          # not one for each: sixteen volumes would take sixteen drive letters,
+          # sixteen mkfs on every boot and sixteen disks in microvm-run. The cost
+          # is that a slot that fills it starves the others. Last, so the letters
+          # above stay where they were, and recreated on every boot like the rest.
+          # Nothing a slot writes here reaches the host. Sparse, so the size is
+          # only a cap.
+          image = img "slots-home";
+          mountPoint = slotsCfg.homeRoot;
+          fsType = "btrfs";
+          label = "slots-home";
+          size = slotsCfg.homeVolumeSizeMiB;
           autoCreate = true;
         }
       ];
@@ -207,6 +223,12 @@
 
         # Same options and reasons as the agent's home above.
         "/home/adurable".options = [
+          "compress=zstd:1"
+          "discard"
+        ];
+
+        # Same options and reasons as the agent's home above.
+        ${slotsCfg.homeRoot}.options = [
           "compress=zstd:1"
           "discard"
         ];

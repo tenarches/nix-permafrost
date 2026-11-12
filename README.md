@@ -242,6 +242,7 @@ tmpfs at 50% of guest memory, which microvm.nix mounts by default.
 | `tmp.img` | `/tmp` | ext4 | 16 GiB | `/dev/vdc` |
 | `swap.img` | *(raw swap)* | — | 8 GiB | `/dev/vdd` |
 | `adurable-home.img` | `/home/adurable` | btrfs + zstd | 32 GiB | `/dev/vde` |
+| `slots-home.img` | `/home/slots` | btrfs + zstd | 128 GiB | `/dev/vdf` |
 
 Images live at `/var/lib/permafrost/permafrost/` and are sparse, so a booted VM occupies well
 under 1 MiB and grows only as the agent writes. Setup costs about 50 ms per boot: `mkfs` on
