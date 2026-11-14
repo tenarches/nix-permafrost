@@ -345,6 +345,7 @@ logged with tag `permafrost-slotctl` (`slotctl wipe slot=f-slot3 step=<step> ...
 | `units` | `user@`, `user-runtime-dir@` and the slice stop, and `/var/lib/systemd/linger/<slot>` goes. |
 | `ssh` | The ssh state (`known_hosts`, keys, control sockets) is inside the home, so this step checks that `~/.ssh` is gone. |
 | `skeleton` | `systemd-tmpfiles --create` makes `tmp` and `work` again. The profile goes back to the default (a `set` through the net helper; if it fails the step is `profile`). Then the home must hold exactly `tmp`, `work` and `workspaces` (empty, mode 0700, owner the slot), and no process of the uid. |
+| `home` | The unit of `permafrost.slotctl.homeUnits` for the slot restarts. By default that is the Home Manager unit of the slot (`home-manager-f\x2dslot1.service` for `f-slot1`) for each slot in `home-manager.users`, so the dotfiles of the module come back without a boot. A slot with no unit keeps the empty skeleton. A unit that fails is `err 8 wipe home`. |
 
 It is safe to run again after a crash or a failed step. `gen` counts the wipes of that slot that ended
 well, in `/var/lib/permafrost-slotctl`. A second `wipe` or `stopjobs` of a slot that one is working on is

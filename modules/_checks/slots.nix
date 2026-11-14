@@ -205,6 +205,18 @@ pkgs.testers.runNixOSTest {
           memorySize = 1536;
         };
 
+        # A stand-in for the Home Manager activation of f-slot1: the wipe must
+        # restart it, so the slot gets its dotfiles back without a boot.
+        systemd.services."slot-home-f-slot1" = {
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            User = "f-slot1";
+            ExecStart = "/bin/sh -c 'echo hm > /home/slots/f-slot1/.hm-file'";
+          };
+        };
+        permafrost.slotctl.homeUnits.f-slot1 = "slot-home-f-slot1.service";
+
         # The test driver numbers the interfaces itself, so the addresses are
         # forced to what the script says.
         networking = {
@@ -1166,7 +1178,9 @@ pkgs.testers.runNixOSTest {
         assert words["gen"] == "1" and int(words["killed"]) >= 2 and int(words["removed"]) >= 8 and int(words["tmp"]) >= 3, out
 
         assert uid_pids(uid) == []
-        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == ["tmp", "work", "workspaces"]
+        # The skeleton, and the file that the home unit wrote after it.
+        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == [".hm-file", "tmp", "work", "workspaces"]
+        assert guest.succeed("stat -c '%u' /home/slots/f-slot1/.hm-file").strip() == "2001"
         assert guest.succeed("find /home/slots/f-slot1 -mindepth 2 | wc -l").strip() == "0"
         assert guest.succeed("find ${slotLib.shareMount}/f-slot1 -mindepth 1 | wc -l").strip() == "0"
         assert guest.succeed("find /tmp /var/tmp /dev/shm -uid 2001 | wc -l").strip() == "0"
@@ -1181,7 +1195,7 @@ pkgs.testers.runNixOSTest {
         assert tree_sums("f-slot2") == sums2
         assert stable_pids(2002) == pids2
         journal = guest.succeed("journalctl -t permafrost-slotctl --no-pager")
-        for step in ["kill", "files", "tmp", "units", "ssh"]:
+        for step in ["kill", "files", "tmp", "units", "ssh", "home"]:
             assert f"slotctl wipe slot=f-slot1 step={step}" in journal, (step, journal)
         assert "slotctl wipe slot=f-slot1 uid=2001 gen=1 done" in journal, journal
         # The slot works again, as a new account would.
