@@ -282,7 +282,7 @@ reach the capabilities of another:
 | Helper | Socket | Verbs | Runs as |
 |---|---|---|---|
 | net helper (`netctl.nix`) | `/run/permafrost-netctl.sock` | `list`, `describe`, `get`, `set`, `restore` | dynamic user, `CAP_NET_ADMIN` only, no inet socket, exits after ten idle seconds |
-| slot helper (`slotctl.nix`) | `/run/permafrost-slotctl.sock` | `wipe`, `stopjobs` | root, seven capabilities (`CAP_KILL`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SETGID`), `AF_UNIX` only |
+| slot helper (`slotctl.nix`) | `/run/permafrost-slotctl.sock` | `wipe`, `stopjobs`, `home` | root, seven capabilities (`CAP_KILL`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SETGID`), `AF_UNIX` only |
 | log reader (`blocked-reader.nix`) | `/run/permafrost-blocked.sock` | `blocked` | dynamic user in `systemd-journal`, no capability, `AF_UNIX` only, read-only system |
 
 The net helper serves one connection after the other. The slot helper serves one connection for
@@ -301,6 +301,7 @@ The grammar is one line of at most 64 characters from `a-z 0-9 -` and single spa
 | `restore` | `ok restore slots=<n> killed=<k>`, `ok restore unchanged`, or `ok restore nothing`. Applies the recorded profiles again. `permafrost-netctl-restore.service` calls it after `nftables.service` loads. |
 | `stopjobs <slot>` | `ok stopjobs slot=f-slot3 uid=2003 killed=<n>`. Ends every process of the uid, whatever protocol and session, and removes nothing. |
 | `wipe <slot>` | `ok wipe slot=f-slot3 uid=2003 gen=<n> killed=<k> removed=<files> tmp=<t>`. See below. |
+| `home <slot>` | `ok home slot=f-slot3 restored=<0\|1>`. Restarts the unit of `permafrost.slotctl.homeUnits` for the slot, which writes the files of the home again. By default that is the Home Manager unit of the slot (`home-manager-f\x2dslot3.service` for `f-slot3`) for each slot in `home-manager.users`. A slot with no unit answers `restored=0`. The wipe leaves the home empty: the harness lists the home after the wipe, refuses anything but the skeleton, and only then sends `home`. |
 | `blocked <slot> <since>` | `ok blocked slot=f-slot3 n=<k> <address>:<port>,...`. See below. |
 
 No verb takes a host, a port, an address, a path or a uid. The slot and the profile are looked up
@@ -317,7 +318,7 @@ status of the ssh command is the code:
 | 5 | `apply` | nft refused the change. |
 | 6 | `internal` | The helper did not answer, or failed. |
 | 7 | `busy` | A `wipe` or `stopjobs` of that slot is working. Try again later. |
-| 8 | `step` | A step of `wipe` or `stopjobs` failed. The answer names it: `err 8 wipe kill`. |
+| 8 | `step` | A step of `wipe`, `stopjobs` or `home` failed. The answer names it: `err 8 wipe kill`, `err 8 home restart`. |
 | 9 | `changed` | The digest that `set` carried is not the build's digest of that profile. Read `describe` again. |
 
 Codes 2, 3, 4 and 9 never change a rule. A change is one nft transaction (delete from the old set, add
@@ -345,7 +346,6 @@ logged with tag `permafrost-slotctl` (`slotctl wipe slot=f-slot3 step=<step> ...
 | `units` | `user@`, `user-runtime-dir@` and the slice stop, and `/var/lib/systemd/linger/<slot>` goes. |
 | `ssh` | The ssh state (`known_hosts`, keys, control sockets) is inside the home, so this step checks that `~/.ssh` is gone. |
 | `skeleton` | `systemd-tmpfiles --create` makes `tmp` and `work` again. The profile goes back to the default (a `set` through the net helper; if it fails the step is `profile`). Then the home must hold exactly `tmp`, `work` and `workspaces` (empty, mode 0700, owner the slot), and no process of the uid. |
-| `home` | The unit of `permafrost.slotctl.homeUnits` for the slot restarts. By default that is the Home Manager unit of the slot (`home-manager-f\x2dslot1.service` for `f-slot1`) for each slot in `home-manager.users`, so the dotfiles of the module come back without a boot. A slot with no unit keeps the empty skeleton. A unit that fails is `err 8 wipe home`. |
 
 It is safe to run again after a crash or a failed step. `gen` counts the wipes of that slot that ended
 well, in `/var/lib/permafrost-slotctl`. A second `wipe` or `stopjobs` of a slot that one is working on is

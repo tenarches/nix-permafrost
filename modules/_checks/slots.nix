@@ -975,7 +975,7 @@ pkgs.testers.runNixOSTest {
     with subtest("describe says the protocol, the verbs and the profiles with their digests"):
         d = describe()
         assert d["proto"] == 2 and d["default"] == "internet-only", d
-        assert d["verbs"] == ["list", "describe", "get", "set", "restore", "wipe", "stopjobs", "blocked"], d["verbs"]
+        assert d["verbs"] == ["list", "describe", "get", "set", "restore", "wipe", "stopjobs", "home", "blocked"], d["verbs"]
         by = {p["name"]: p for p in d["profiles"]}
         assert sorted(by) == ["internet-only", "lan-test"], by
         assert by["lan-test"]["title"] == "LAN test", by
@@ -1178,9 +1178,8 @@ pkgs.testers.runNixOSTest {
         assert words["gen"] == "1" and int(words["killed"]) >= 2 and int(words["removed"]) >= 8 and int(words["tmp"]) >= 3, out
 
         assert uid_pids(uid) == []
-        # The skeleton, and the file that the home unit wrote after it.
-        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == [".hm-file", "tmp", "work", "workspaces"]
-        assert guest.succeed("stat -c '%u' /home/slots/f-slot1/.hm-file").strip() == "2001"
+        # The wipe leaves the skeleton only: the harness checks that before it asks for `home`.
+        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == ["tmp", "work", "workspaces"]
         assert guest.succeed("find /home/slots/f-slot1 -mindepth 2 | wc -l").strip() == "0"
         assert guest.succeed("find ${slotLib.shareMount}/f-slot1 -mindepth 1 | wc -l").strip() == "0"
         assert guest.succeed("find /tmp /var/tmp /dev/shm -uid 2001 | wc -l").strip() == "0"
@@ -1195,9 +1194,19 @@ pkgs.testers.runNixOSTest {
         assert tree_sums("f-slot2") == sums2
         assert stable_pids(2002) == pids2
         journal = guest.succeed("journalctl -t permafrost-slotctl --no-pager")
-        for step in ["kill", "files", "tmp", "units", "ssh", "home"]:
+        for step in ["kill", "files", "tmp", "units", "ssh"]:
             assert f"slotctl wipe slot=f-slot1 step={step}" in journal, (step, journal)
         assert "slotctl wipe slot=f-slot1 uid=2001 gen=1 done" in journal, journal
+        # `home` restarts the home unit of the slot: its file is back, owned by the slot.
+        status, out = netctl("home f-slot1")
+        assert (status, out.strip()) == (0, "ok home slot=f-slot1 restored=1"), (status, out)
+        assert sorted(guest.succeed("ls -A /home/slots/f-slot1").split()) == [".hm-file", "tmp", "work", "workspaces"]
+        assert guest.succeed("stat -c '%u' /home/slots/f-slot1/.hm-file").strip() == "2001"
+        assert "slotctl home slot=f-slot1 unit=slot-home-f-slot1.service" in guest.succeed("journalctl -t permafrost-slotctl --no-pager")
+        # A slot with no home unit: nothing to restore, and nothing of it changes.
+        status, out = netctl("home f-slot2")
+        assert (status, out.strip()) == (0, "ok home slot=f-slot2 restored=0"), (status, out)
+        assert tree_sums("f-slot2") == sums2
         # The slot works again, as a new account would.
         site.succeed(ssh(slot, slot, "echo again > ~/workspaces/new && cat ~/workspaces/new && ls ~/tmp ~/work"))
         # Twice in a row is ok, and gen counts both.
@@ -1220,6 +1229,9 @@ pkgs.testers.runNixOSTest {
             ("wipe /home/slots/f-slot1", 2),
             ("wipe " + "a" * 60, 2),
             ("stopjobs", 2),
+            ("home", 2),
+            ("home f-slot9", 3),
+            ("home f-slot1 f-slot2", 2),
         ]:
             status, out = netctl(cmd)
             assert status == code and len(out.strip().splitlines()) == 1 and out.startswith("err "), (cmd[:40], code, status, out)

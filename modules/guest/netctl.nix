@@ -39,6 +39,7 @@ in
   #   restore
   #   wipe <slot>          (slotctl.nix)
   #   stopjobs <slot>      (slotctl.nix)
+  #   home <slot>          (slotctl.nix)
   #   blocked <slot> <since>   (blocked-reader.nix)
   #
   # One line of at most 64 characters from `a-z 0-9 -` and single spaces. No
@@ -49,7 +50,7 @@ in
   # not declared, 4 profile not declared, 5 nft refused, 6 internal, 7 busy,
   # 8 a wipe step failed, 9 the digest of `set` is not the build's.
   #
-  # The wrapper sends `wipe` and `stopjobs` to the socket of the root helper in
+  # The wrapper sends `wipe`, `stopjobs` and `home` to the socket of the root helper in
   # slotctl.nix and `blocked` to the log reader in blocked-reader.nix. Those
   # are separate units, so a bug in either cannot touch nft: this helper keeps
   # CAP_NET_ADMIN and nothing else. `describe` says which verbs the guest
@@ -118,6 +119,7 @@ in
       ++ lib.optionals (has "slotctl") [
         "wipe"
         "stopjobs"
+        "home"
       ]
       ++ lib.optionals (has "blockedReader") [ "blocked" ];
 
@@ -431,7 +433,7 @@ in
           # wait for those in front of it; a wipe may take long. socat waits this
           # long for the answer.
           case ''${cmd%% *} in
-            wipe | stopjobs)
+            wipe | stopjobs | home)
               sock=${slots.sockets.slotctl}
               patience=130
               ;;

@@ -47,9 +47,12 @@ in
   #             back to the default (the `set` of the net helper), and the home
   #             must hold exactly the skeleton, empty, with the owner and the
   #             mode of the module
-  #   home      the unit of `permafrost.slotctl.homeUnits` for the slot (the
-  #             Home Manager activation) restarts and writes the dotfiles of
-  #             the module again; a slot with no unit keeps the empty skeleton
+  #
+  # `home <slot>` restarts the unit of `permafrost.slotctl.homeUnits` for the
+  # slot (the Home Manager activation), which writes the dotfiles of the module
+  # again. The wipe does not do it: the harness lists the home after the wipe
+  # and refuses anything but the skeleton, and only then asks for `home`. A slot
+  # with no unit answers `restored=0`. A unit that fails is `err 8 home restart`.
   #
   # The wipe is idempotent: it can run again after a crash or a failed step.
   # `gen` in the answer counts the wipes of the slot that ended well, and is kept
@@ -417,22 +420,28 @@ in
                 raise Step("ssh", ".ssh is there")
             log(f"slotctl wipe slot={name} step=ssh")
             skeleton(name, slot)
-            # The home is proved empty first; then its activation unit writes
-            # the files of the module again, as a boot would.
-            unit = CFG["homeUnits"].get(name)
-            if unit is not None:
-                # 30 s: the whole wipe must answer inside the 130 s that netctl
-                # waits (and the 120 s of the harness). An activation takes seconds.
-                try:
-                    r = run([CFG["systemctl"], "restart", unit], timeout=30)
-                except subprocess.TimeoutExpired:
-                    raise Step("home", "timeout")
-                if r.returncode != 0:
-                    raise Step("home", unit)
-                log(f"slotctl wipe slot={name} step=home unit={unit}")
             gen = bump(name)
             log(f"slotctl wipe slot={name} uid={uid} gen={gen} done")
             return f"ok wipe slot={name} uid={uid} gen={gen} killed={killed} removed={removed} tmp={tmp}"
+
+
+        def home(name, slot):
+            """Restart the unit that writes the files of the home (Home Manager).
+
+            The harness calls it only after its own check found the skeleton
+            and nothing else, so the wipe itself leaves the home empty."""
+            unit = CFG["homeUnits"].get(name)
+            if unit is None:
+                log(f"slotctl home slot={name} unit=none")
+                return f"ok home slot={name} restored=0"
+            try:
+                r = run([CFG["systemctl"], "restart", unit], timeout=30)
+            except subprocess.TimeoutExpired:
+                raise Step("restart", "timeout")
+            if r.returncode != 0:
+                raise Step("restart", f"exit {r.returncode}")
+            log(f"slotctl home slot={name} unit={unit}")
+            return f"ok home slot={name} restored=1"
 
 
         def stopjobs(name, slot):
@@ -446,7 +455,7 @@ in
             if not LINE.fullmatch(line):
                 raise Refused("usage")
             parts = line.split(" ")
-            if len(parts) != 2 or parts[0] not in ("wipe", "stopjobs") or not TOKEN.fullmatch(parts[1]):
+            if len(parts) != 2 or parts[0] not in ("wipe", "stopjobs", "home") or not TOKEN.fullmatch(parts[1]):
                 raise Refused("usage")
             verb, name = parts
             if name not in CFG["slots"]:
@@ -457,7 +466,7 @@ in
                 raise Refused("busy")
             try:
                 try:
-                    return (wipe if verb == "wipe" else stopjobs)(name, CFG["slots"][name])
+                    return {"wipe": wipe, "stopjobs": stopjobs, "home": home}[verb](name, CFG["slots"][name])
                 except Step as e:
                     log(f"slotctl {verb} slot={name} step={e.step} failed: {e.why}")
                     raise Refused("step", f"{verb} {e.step}")
@@ -552,8 +561,9 @@ in
           defaultText = lib.literalExpression ''"home-manager-<slot>.service" for each slot in home-manager.users'';
           description = ''
             For each slot, the oneshot unit that writes the files of the home
-            again. The wipe restarts it after the home holds only the skeleton
-            (step `home`). A slot that is not here keeps an empty home.
+            again. The verb `home` restarts it; the harness asks for it after
+            its own check of the wiped home. A slot that is not here keeps an
+            empty home.
           '';
         };
       };
